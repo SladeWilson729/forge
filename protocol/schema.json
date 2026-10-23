@@ -1,0 +1,2553 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Forge Arena protocol v1 draft",
+  "description": "Task 1.1 catalog contract. Open questions in schema.md section E are deliberately not silently resolved. Additional properties remain allowed on message envelopes until these gaps are decided.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/ServerMessage"
+    },
+    {
+      "$ref": "#/$defs/ClientMessage"
+    }
+  ],
+  "$defs": {
+    "Int32": {
+      "type": "integer",
+      "minimum": -2147483648,
+      "maximum": 2147483647,
+      "$comment": "forge-game/src/main/java/forge/trackable/TrackableObject.java:47 — Java int; individual semantics may further restrict values."
+    },
+    "CardRef": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/Int32"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "$comment": "Plan 3.3: visible integer ids; hidden per-seat opaque string ids. Never send Forge hidden ids as a substitute for IdMapper."
+    },
+    "PlayerRef": {
+      "$ref": "#/$defs/Int32",
+      "$comment": "forge-game/src/main/java/forge/game/GameEntityView.java:16 — PlayerView inherits the integer identity; seat index is a different concept."
+    },
+    "Sequence": {
+      "type": "integer",
+      "minimum": 0,
+      "$comment": "Plan 3: monotonic per-seat seq/clientSeq/baseSeq. Counter width and rollover are unspecified (E13)."
+    },
+    "RequestId": {
+      "$ref": "#/$defs/Int32",
+      "$comment": "forge-game/src/main/java/forge/game/IIdentifiable.java:4 — Existing IdentifiableNetEvent inherits this correlation type; JSON id lifetime/reconnect policy still needs E13."
+    },
+    "ZoneType": {
+      "type": "string",
+      "enum": [
+        "Hand",
+        "Library",
+        "Graveyard",
+        "Battlefield",
+        "Exile",
+        "Flashback",
+        "Command",
+        "Stack",
+        "Sideboard",
+        "Ante",
+        "Merged",
+        "SchemeDeck",
+        "PlanarDeck",
+        "AttractionDeck",
+        "Junkyard",
+        "ContraptionDeck",
+        "StickerSheets",
+        "Subgame",
+        "ExtraHand",
+        "None"
+      ],
+      "$comment": "forge-game/src/main/java/forge/game/zone/ZoneType.java:14"
+    },
+    "PhaseType": {
+      "type": "string",
+      "enum": [
+        "UNTAP",
+        "UPKEEP",
+        "DRAW",
+        "MAIN1",
+        "COMBAT_BEGIN",
+        "COMBAT_DECLARE_ATTACKERS",
+        "COMBAT_DECLARE_BLOCKERS",
+        "COMBAT_FIRST_STRIKE_DAMAGE",
+        "COMBAT_DAMAGE",
+        "COMBAT_END",
+        "MAIN2",
+        "END_OF_TURN",
+        "CLEANUP"
+      ],
+      "$comment": "forge-game/src/main/java/forge/game/phase/PhaseType.java:15"
+    },
+    "EntityRef": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "cardId": {
+              "$ref": "#/$defs/CardRef"
+            }
+          },
+          "required": [
+            "cardId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "playerId": {
+              "$ref": "#/$defs/PlayerRef"
+            }
+          },
+          "required": [
+            "playerId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "planeswalkerId": {
+              "$ref": "#/$defs/CardRef"
+            }
+          },
+          "required": [
+            "planeswalkerId"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "$comment": "Plan 3.3 chosen/attackTargets show playerId and planeswalkerId; cardId is the generic card reference. Battle and stack target tagging remains E8."
+    },
+    "Counters": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/Int32"
+      },
+      "$comment": "forge-game/src/main/java/forge/game/GameEntityView.java:76 — Counts are integers; CounterType wire key spelling remains E8."
+    },
+    "VisibleCard": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/CardRef"
+        },
+        "name": {
+          "type": "string",
+          "$comment": "forge-game/src/main/java/forge/game/card/CardView.java:1287"
+        },
+        "set": {
+          "type": "string",
+          "$comment": "forge-game/src/main/java/forge/game/card/CardView.java:1543"
+        },
+        "num": {
+          "$comment": "Plan 3.3 gives string collector number; exact lookup deferred to task 1.2.",
+          "type": "string"
+        },
+        "tapped": {
+          "type": "boolean",
+          "$comment": "forge-game/src/main/java/forge/game/card/CardView.java:269"
+        },
+        "sick": {
+          "type": "boolean",
+          "$comment": "forge-game/src/main/java/forge/game/card/CardView.java:262"
+        },
+        "power": {
+          "$ref": "#/$defs/Int32",
+          "$comment": "forge-game/src/main/java/forge/game/card/CardView.java:1418"
+        },
+        "toughness": {
+          "$ref": "#/$defs/Int32",
+          "$comment": "forge-game/src/main/java/forge/game/card/CardView.java:1445"
+        },
+        "damage": {
+          "$ref": "#/$defs/Int32",
+          "$comment": "forge-game/src/main/java/forge/game/card/CardView.java:358"
+        },
+        "counters": {
+          "$ref": "#/$defs/Counters"
+        },
+        "attachedTo": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EntityRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "$comment": "forge-game/src/main/java/forge/game/card/CardView.java:723"
+        },
+        "attacking": {
+          "type": "boolean",
+          "$comment": "forge-game/src/main/java/forge/game/card/CardView.java:219"
+        },
+        "blocking": {
+          "type": "boolean",
+          "$comment": "forge-game/src/main/java/forge/game/card/CardView.java:241 — Boolean in CardView; blocker-to-attacker arrows need an additional representation (E8)."
+        },
+        "attackTarget": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EntityRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "$comment": "Plan 2.5 names attackTarget; GameView.getCombat() supplies the combat graph, mapping pending task 1.2/E8."
+        },
+        "faceDown": {
+          "type": "boolean"
+        },
+        "controllerId": {
+          "$ref": "#/$defs/PlayerRef",
+          "$comment": "forge-game/src/main/java/forge/game/card/CardView.java:149"
+        },
+        "ownerId": {
+          "$ref": "#/$defs/PlayerRef",
+          "$comment": "forge-game/src/main/java/forge/game/card/CardView.java:142"
+        },
+        "token": {
+          "type": "boolean",
+          "$comment": "forge-game/src/main/java/forge/game/card/CardView.java:284"
+        },
+        "isCommander": {
+          "type": "boolean",
+          "$comment": "forge-game/src/main/java/forge/game/card/CardView.java:319"
+        },
+        "hidden": {
+          "const": false
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false,
+      "$comment": "Visibility is decided server-side with CardView.canBeShownTo and canFaceDownBeShownTo. Optional fields support partial public card data; see E8 for final required fields."
+    },
+    "HiddenCard": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "hidden": {
+          "const": true
+        }
+      },
+      "required": [
+        "id",
+        "hidden"
+      ],
+      "additionalProperties": false
+    },
+    "FaceDownCard": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/CardRef"
+        },
+        "tapped": {
+          "type": "boolean",
+          "$comment": "forge-game/src/main/java/forge/game/card/CardView.java:269"
+        },
+        "sick": {
+          "type": "boolean",
+          "$comment": "forge-game/src/main/java/forge/game/card/CardView.java:262"
+        },
+        "power": {
+          "$ref": "#/$defs/Int32",
+          "$comment": "forge-game/src/main/java/forge/game/card/CardView.java:1418"
+        },
+        "toughness": {
+          "$ref": "#/$defs/Int32",
+          "$comment": "forge-game/src/main/java/forge/game/card/CardView.java:1445"
+        },
+        "damage": {
+          "$ref": "#/$defs/Int32",
+          "$comment": "forge-game/src/main/java/forge/game/card/CardView.java:358"
+        },
+        "counters": {
+          "$ref": "#/$defs/Counters"
+        },
+        "attachedTo": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EntityRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "$comment": "forge-game/src/main/java/forge/game/card/CardView.java:723"
+        },
+        "attacking": {
+          "type": "boolean",
+          "$comment": "forge-game/src/main/java/forge/game/card/CardView.java:219"
+        },
+        "blocking": {
+          "type": "boolean",
+          "$comment": "forge-game/src/main/java/forge/game/card/CardView.java:241 — Boolean in CardView; blocker-to-attacker arrows need an additional representation (E8)."
+        },
+        "attackTarget": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EntityRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "$comment": "Plan 2.5 names attackTarget; GameView.getCombat() supplies the combat graph, mapping pending task 1.2/E8."
+        },
+        "faceDown": {
+          "const": true
+        },
+        "controllerId": {
+          "$ref": "#/$defs/PlayerRef",
+          "$comment": "forge-game/src/main/java/forge/game/card/CardView.java:149"
+        },
+        "ownerId": {
+          "$ref": "#/$defs/PlayerRef",
+          "$comment": "forge-game/src/main/java/forge/game/card/CardView.java:142"
+        },
+        "token": {
+          "type": "boolean",
+          "$comment": "forge-game/src/main/java/forge/game/card/CardView.java:284"
+        },
+        "isCommander": {
+          "type": "boolean",
+          "$comment": "forge-game/src/main/java/forge/game/card/CardView.java:319"
+        }
+      },
+      "required": [
+        "id",
+        "faceDown"
+      ],
+      "additionalProperties": false
+    },
+    "Card": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/VisibleCard"
+        },
+        {
+          "$ref": "#/$defs/HiddenCard"
+        },
+        {
+          "$ref": "#/$defs/FaceDownCard"
+        }
+      ],
+      "$comment": "AnyOf permits identifiable face-down cards as well as identity-free face-down public objects. Schema cannot enforce per-seat visibility; serializer tests must do so."
+    },
+    "ManaPool": {
+      "type": "object",
+      "properties": {
+        "W": {
+          "$ref": "#/$defs/Int32"
+        },
+        "U": {
+          "$ref": "#/$defs/Int32"
+        },
+        "B": {
+          "$ref": "#/$defs/Int32"
+        },
+        "R": {
+          "$ref": "#/$defs/Int32"
+        },
+        "G": {
+          "$ref": "#/$defs/Int32"
+        },
+        "C": {
+          "$ref": "#/$defs/Int32"
+        }
+      },
+      "required": [
+        "W",
+        "U",
+        "B",
+        "R",
+        "G",
+        "C"
+      ],
+      "additionalProperties": false,
+      "$comment": "forge-game/src/main/java/forge/game/player/PlayerView.java:495"
+    },
+    "Zones": {
+      "type": "object",
+      "properties": {
+        "hand": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Card"
+          }
+        },
+        "library": {
+          "type": "object",
+          "properties": {
+            "count": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "count"
+          ],
+          "additionalProperties": false
+        },
+        "graveyard": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Card"
+          }
+        },
+        "exile": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Card"
+          }
+        },
+        "command": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Card"
+          }
+        },
+        "battlefield": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Card"
+          }
+        }
+      },
+      "required": [
+        "hand",
+        "library",
+        "graveyard",
+        "exile",
+        "command",
+        "battlefield"
+      ],
+      "additionalProperties": false
+    },
+    "Player": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/PlayerRef"
+        },
+        "name": {
+          "type": "string"
+        },
+        "life": {
+          "$ref": "#/$defs/Int32",
+          "$comment": "forge-game/src/main/java/forge/game/player/PlayerView.java:191"
+        },
+        "poison": {
+          "$ref": "#/$defs/Int32",
+          "$comment": "forge-game/src/main/java/forge/game/GameEntityView.java:79"
+        },
+        "commanderDamage": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Int32"
+          },
+          "$comment": "forge-game/src/main/java/forge/game/player/PlayerView.java:346 — Keys in plan example look like player ids, but Forge queries by commander CardView; E8."
+        },
+        "manaPool": {
+          "$ref": "#/$defs/ManaPool"
+        },
+        "zones": {
+          "$ref": "#/$defs/Zones"
+        },
+        "eliminated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "life",
+        "poison",
+        "commanderDamage",
+        "manaPool",
+        "zones",
+        "eliminated"
+      ],
+      "additionalProperties": false
+    },
+    "StackItem": {
+      "type": "object",
+      "properties": {
+        "stackId": {
+          "$ref": "#/$defs/Int32"
+        },
+        "sourceCardId": {
+          "$ref": "#/$defs/CardRef"
+        },
+        "controllerId": {
+          "$ref": "#/$defs/PlayerRef"
+        },
+        "text": {
+          "type": "string"
+        },
+        "targets": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CardRef"
+              },
+              {
+                "$ref": "#/$defs/PlayerRef"
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "stackId",
+        "sourceCardId",
+        "controllerId",
+        "text",
+        "targets"
+      ],
+      "additionalProperties": false,
+      "$comment": "forge-game/src/main/java/forge/game/spellability/StackItemView.java:146 — Also getTargetPlayers/getTargetStackItems; flat plan targets cannot distinguish these namespaces (E8)."
+    },
+    "ActiveInput": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "$comment": "Plan 2.2/3.3 spell declareAttackers, declareBlockers, select, waiting. Names and payloads for priority, targeting, mana payment, and mulligan remain E7; not invented here."
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "okLabel": {
+          "type": "string"
+        },
+        "cancelLabel": {
+          "type": "string"
+        },
+        "buttons": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "enabled"
+              ],
+              "additionalProperties": false
+            },
+            "cancel": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "enabled"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "ok",
+            "cancel"
+          ],
+          "additionalProperties": false
+        },
+        "highlighted": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/CardRef"
+              },
+              "strength": {
+                "type": "integer",
+                "enum": [
+                  1,
+                  2
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "strength"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "chosen": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EntityRef"
+          }
+        },
+        "attackTargets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EntityRef"
+          }
+        },
+        "min": {
+          "$ref": "#/$defs/Int32"
+        },
+        "max": {
+          "$ref": "#/$defs/Int32"
+        },
+        "selectable": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CardRef"
+          }
+        },
+        "targets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EntityRef"
+          }
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false,
+      "$comment": "forge-gui/src/main/java/forge/gamemodes/match/Selection.java:13 — min/max/cards/targets/chosen source; selectable field spelling and stack refs need E7/E8 approval. Only kind is universally required because waiting has no choice payload."
+    },
+    "StateSnapshot": {
+      "type": "object",
+      "properties": {
+        "turn": {
+          "$ref": "#/$defs/Int32"
+        },
+        "activePlayerId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlayerRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "priorityPlayerId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlayerRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "phase": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PhaseType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "monarchId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlayerRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "initiativeId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlayerRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "players": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Player"
+          }
+        },
+        "stack": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StackItem"
+          }
+        },
+        "activeInput": {
+          "$ref": "#/$defs/ActiveInput"
+        }
+      },
+      "required": [
+        "turn",
+        "activePlayerId",
+        "priorityPlayerId",
+        "phase",
+        "monarchId",
+        "initiativeId",
+        "players",
+        "stack",
+        "activeInput"
+      ],
+      "additionalProperties": false,
+      "$comment": "Plan 3.3 full per-seat shape, not the Phase 0 WsServer opening-hand placeholder. Null active/priority/phase supports pre-game/transition state; GameView.java:99 getPhase and :106 getPlayerTurn may be unset. Designation getters deferred to task 1.2."
+    },
+    "PromptKind": {
+      "type": "string",
+      "enum": [
+        "choose",
+        "chooseEntities",
+        "order",
+        "confirm",
+        "option",
+        "number",
+        "text",
+        "assignCombatDamage",
+        "assignGeneric",
+        "manipulateList",
+        "chooseAbility",
+        "sideboard"
+      ]
+    },
+    "PromptOption": {
+      "$comment": "forge-gui/src/main/java/forge/gui/interfaces/IGuiGame.java:189 — Arbitrary T, GameEntityView, PaperCard, and byte targets require a tagged option encoding; E5. No Java serialization or function bodies are JSON payloads."
+    },
+    "AbilityOption": {
+      "type": "object",
+      "properties": {
+        "abilityId": {
+          "$ref": "#/$defs/Int32"
+        },
+        "text": {
+          "type": "string",
+          "$comment": "forge-game/src/main/java/forge/game/spellability/SpellAbilityView.java:53"
+        }
+      },
+      "required": [
+        "abilityId",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "PromptResult": {
+      "$comment": "forge-gui/src/main/java/forge/gui/interfaces/IGuiGame.java:44 — Result is correlated with the pending prompt, including generic choices, maps and OrderResult; full wire encoding remains E5."
+    },
+    "TriggerDecision": {
+      "type": "string",
+      "enum": [
+        "ASK",
+        "ACCEPT",
+        "DECLINE"
+      ],
+      "$comment": "forge-gui/src/main/java/forge/player/AutoYieldStore.java:12"
+    },
+    "YieldPref": {
+      "type": "string",
+      "enum": [
+        "YIELD_INTERRUPT_ON_ATTACKERS",
+        "YIELD_INTERRUPT_ON_OPPONENT_SPELL",
+        "YIELD_INTERRUPT_ON_TARGETING",
+        "YIELD_INTERRUPT_ON_TRIGGERS",
+        "YIELD_INTERRUPT_ON_REVEAL",
+        "YIELD_INTERRUPT_ON_MASS_REMOVAL",
+        "YIELD_AUTO_PASS_NO_ACTIONS",
+        "YIELD_AUTO_PASS_RESPECTS_INTERRUPTS",
+        "YIELD_SKIP_PHASE_DELAY",
+        "YIELD_SKIP_RESOLVE_DELAY",
+        "YIELD_SUPPRESS_ON_OWN_TURN",
+        "YIELD_SUPPRESS_AFTER_END",
+        "YIELD_AVAILABLE_ACTIONS_BUDGET_MS",
+        "YIELD_DECLINE_SCOPE_STACK_YIELD",
+        "YIELD_DECLINE_SCOPE_NO_ACTIONS",
+        "UI_SHOW_ACTIONABLE_HIGHLIGHTS",
+        "UI_SHOW_AUTOTAP_PREVIEW"
+      ],
+      "$comment": "forge-gui/src/main/java/forge/gamemodes/match/YieldController.java:52"
+    },
+    "YieldSeed": {
+      "type": "object",
+      "properties": {
+        "cardYields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "abilityYields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "cardTriggerDecisions": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/TriggerDecision"
+          }
+        },
+        "abilityTriggerDecisions": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/TriggerDecision"
+          }
+        },
+        "autoYieldsDisabled": {
+          "type": "boolean"
+        },
+        "autoTriggersDisabled": {
+          "type": "boolean"
+        },
+        "skipPhases": {
+          "$comment": "forge-gui/src/main/java/forge/gamemodes/match/YieldStateSnapshot.java:28 — Object-keyed map; JSON encoding pending E6."
+        },
+        "prefOverrides": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/YieldPref"
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "cardYields",
+        "abilityYields",
+        "cardTriggerDecisions",
+        "abilityTriggerDecisions",
+        "autoYieldsDisabled",
+        "autoTriggersDisabled",
+        "skipPhases",
+        "prefOverrides"
+      ],
+      "additionalProperties": false,
+      "$comment": "forge-gui/src/main/java/forge/gamemodes/match/YieldStateSnapshot.java:21 — Field names copied from public record because plan only says snapshot; map encoding remains E6."
+    },
+    "YieldUpdate": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "setMarker"
+            },
+            "phaseOwnerId": {
+              "$ref": "#/$defs/PlayerRef"
+            },
+            "phase": {
+              "$ref": "#/$defs/PhaseType"
+            }
+          },
+          "required": [
+            "kind",
+            "phaseOwnerId",
+            "phase"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "clearMarker"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "stackYield"
+            },
+            "active": {
+              "type": "boolean"
+            },
+            "respectsInterrupts": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "active",
+            "respectsInterrupts"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "untilEndOfTurn"
+            },
+            "active": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "active"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "cardAutoYield"
+            },
+            "cardKey": {
+              "type": "string"
+            },
+            "active": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "cardKey",
+            "active"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "triggerDecision"
+            },
+            "storageKey": {
+              "type": "string"
+            },
+            "decision": {
+              "$ref": "#/$defs/TriggerDecision"
+            }
+          },
+          "required": [
+            "kind",
+            "storageKey",
+            "decision"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "disableYields"
+            },
+            "disabled": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "disabled"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "disableTriggers"
+            },
+            "disabled": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "disabled"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "skipPhase"
+            },
+            "turnPlayerId": {
+              "$ref": "#/$defs/PlayerRef"
+            },
+            "phase": {
+              "$ref": "#/$defs/PhaseType"
+            },
+            "skip": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "turnPlayerId",
+            "phase",
+            "skip"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "pref"
+            },
+            "name": {
+              "$ref": "#/$defs/YieldPref"
+            },
+            "value": {
+              "type": "string",
+              "$comment": "forge-gui/src/main/java/forge/gamemodes/match/YieldUpdate.java:53"
+            }
+          },
+          "required": [
+            "kind",
+            "name",
+            "value"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "seed"
+            },
+            "snapshot": {
+              "$ref": "#/$defs/YieldSeed"
+            }
+          },
+          "required": [
+            "kind",
+            "snapshot"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "clearAbilityOrders"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": true
+        }
+      ],
+      "$comment": "Plan 2.6: player inferred from authenticated seat and atOrPastAtClick computed server-side. Authoritative yieldState may need additional fields; see E6."
+    },
+    "EventKind": {
+      "type": "string",
+      "enum": [
+        "zoneChange",
+        "landPlayed",
+        "spellCast",
+        "resolved",
+        "countered",
+        "tap",
+        "untap",
+        "damage",
+        "counterChange",
+        "tokenCreated",
+        "attack",
+        "block",
+        "shuffle",
+        "coinFlip",
+        "dieRoll",
+        "mulligan",
+        "turnBegan",
+        "reveal",
+        "lifeChange",
+        "triggerFired",
+        "monarchChange",
+        "initiativeChange",
+        "playerEliminated",
+        "gameOver"
+      ]
+    },
+    "ZoneRef": {
+      "type": "object",
+      "properties": {
+        "player": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlayerRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "zoneType": {
+          "$ref": "#/$defs/ZoneType"
+        }
+      },
+      "required": [
+        "player",
+        "zoneType"
+      ],
+      "additionalProperties": false,
+      "$comment": "forge-game/src/main/java/forge/game/zone/ZoneView.java:11 — Record fields retained as draft encoding; final event payload mapping is task 1.8/E9."
+    },
+    "hello": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "hello"
+        },
+        "seq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "protocolVersion": {
+          "const": 1
+        },
+        "serverVersion": {
+          "type": "string"
+        },
+        "seat": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "type",
+        "seq",
+        "protocolVersion",
+        "serverVersion",
+        "seat"
+      ],
+      "additionalProperties": true
+    },
+    "lobby": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "lobby"
+        },
+        "seq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "seats": {
+          "type": "array",
+          "items": {
+            "$comment": "Plan 3.1: seats, names, deck status and ready flags. No Forge Arena Lobby DTO yet; nesting and status enum need E11."
+          }
+        }
+      },
+      "required": [
+        "type",
+        "seq"
+      ],
+      "additionalProperties": true,
+      "$comment": "E11: seats is described by the plan; exact payload field layout is unresolved."
+    },
+    "deckResult": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "deckResult"
+        },
+        "seq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "type",
+        "seq",
+        "ok",
+        "errors"
+      ],
+      "additionalProperties": true,
+      "$comment": "E11: parsed commander and count are required concepts but their field names/shape are unspecified; no fabricated DTO."
+    },
+    "state": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "state"
+        },
+        "seq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "turn": {
+          "$ref": "#/$defs/Int32"
+        },
+        "activePlayerId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlayerRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "priorityPlayerId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlayerRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "phase": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PhaseType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "monarchId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlayerRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "initiativeId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlayerRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "players": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Player"
+          }
+        },
+        "stack": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StackItem"
+          }
+        },
+        "activeInput": {
+          "$ref": "#/$defs/ActiveInput"
+        }
+      },
+      "required": [
+        "type",
+        "seq",
+        "turn",
+        "activePlayerId",
+        "priorityPlayerId",
+        "phase",
+        "monarchId",
+        "initiativeId",
+        "players",
+        "stack",
+        "activeInput"
+      ],
+      "additionalProperties": true,
+      "$comment": "Plan 3.3 full per-seat shape, not the Phase 0 WsServer opening-hand placeholder. Null active/priority/phase supports pre-game/transition state; GameView.java:99 getPhase and :106 getPlayerTurn may be unset. Designation getters deferred to task 1.2."
+    },
+    "event": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "event"
+        },
+        "seq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "kind": {
+          "$ref": "#/$defs/EventKind"
+        },
+        "stateSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "cardIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CardRef"
+          }
+        },
+        "playerIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PlayerRef"
+          }
+        },
+        "from": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ZoneRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "to": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ZoneRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "amount": {
+          "$ref": "#/$defs/Int32"
+        },
+        "result": {
+          "$comment": "Plan 3.1a/task 1.8; event-specific result encoding unresolved E9. Coin bool, numeric die int and planar enum are source-backed below."
+        }
+      },
+      "required": [
+        "type",
+        "seq",
+        "kind",
+        "stateSeq"
+      ],
+      "additionalProperties": true,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "coinFlip"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "type": "boolean",
+                "$comment": "forge-game/src/main/java/forge/game/event/GameEventFlipCoin.java:5"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "dieRoll"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Int32"
+                  },
+                  {
+                    "type": "string",
+                    "enum": [
+                      "Planeswalk",
+                      "Chaos",
+                      "Blank"
+                    ]
+                  }
+                ],
+                "$comment": "forge-game/src/main/java/forge/game/event/GameEventRollDie.java:5 — int result plus optional PlanarDice; exact planar encoding and die-size field name E9."
+              }
+            }
+          }
+        }
+      ]
+    },
+    "log": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "log"
+        },
+        "seq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "seq",
+        "text"
+      ],
+      "additionalProperties": true,
+      "$comment": "E2: type is already const log; GameEventAddLog.type is a GameLogEntryType and cannot share that key. Category field unresolved."
+    },
+    "logTail": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "logTail"
+        },
+        "seq": {
+          "$ref": "#/$defs/Sequence"
+        }
+      },
+      "required": [
+        "type",
+        "seq"
+      ],
+      "additionalProperties": true,
+      "$comment": "Plan 3.1 mentions logTail on reconnect/resync but gives no envelope or entries field name. E2 asks whether it is a message or bundled field; this reserves the mentioned type without inventing payload fields."
+    },
+    "prompt": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "prompt"
+        },
+        "seq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "requestId": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "kind": {
+          "$ref": "#/$defs/PromptKind"
+        },
+        "title": {
+          "type": "string"
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PromptOption"
+          }
+        },
+        "min": {
+          "$ref": "#/$defs/Int32"
+        },
+        "max": {
+          "$ref": "#/$defs/Int32"
+        },
+        "sourceCardId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CardRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "seq",
+        "requestId",
+        "kind"
+      ],
+      "additionalProperties": true,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "chooseAbility"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "options": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/AbilityOption"
+                }
+              }
+            },
+            "required": [
+              "options"
+            ]
+          }
+        }
+      ]
+    },
+    "promptCancel": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "promptCancel"
+        },
+        "seq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "requestId": {
+          "$ref": "#/$defs/RequestId"
+        }
+      },
+      "required": [
+        "type",
+        "seq",
+        "requestId"
+      ],
+      "additionalProperties": true
+    },
+    "message": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "message"
+        },
+        "seq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "level": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "seq",
+        "level",
+        "text"
+      ],
+      "additionalProperties": true,
+      "$comment": "Plan 7.8 defines level rejected; remaining info/error level spellings unspecified (E3)."
+    },
+    "macroState": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "macroState"
+        },
+        "seq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "recording": {
+          "type": "boolean"
+        },
+        "replaying": {
+          "type": "boolean"
+        },
+        "hasActions": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "seq",
+        "recording",
+        "replaying",
+        "hasActions"
+      ],
+      "additionalProperties": true,
+      "$comment": "forge-gui/src/main/java/forge/interfaces/IMacroSystem.java:14"
+    },
+    "clock": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "clock"
+        },
+        "seq": {
+          "$ref": "#/$defs/Sequence"
+        }
+      },
+      "required": [
+        "type",
+        "seq"
+      ],
+      "additionalProperties": true,
+      "$comment": "Plan 3.1: per-seat remainingMs integer and running boolean, but container/id fields and timer source do not exist in this bridge yet (E11)."
+    },
+    "SeatClock": {
+      "type": "object",
+      "properties": {
+        "remainingMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "running": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "remainingMs",
+        "running"
+      ],
+      "additionalProperties": false
+    },
+    "yieldState": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "yieldState"
+        },
+        "seq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "setMarker",
+            "clearMarker",
+            "stackYield",
+            "untilEndOfTurn",
+            "cardAutoYield",
+            "triggerDecision",
+            "disableYields",
+            "disableTriggers",
+            "skipPhase",
+            "pref",
+            "seed",
+            "clearAbilityOrders"
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "seq",
+        "kind"
+      ],
+      "additionalProperties": true,
+      "allOf": [
+        {
+          "$ref": "#/$defs/YieldUpdate"
+        }
+      ]
+    },
+    "pong": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "pong"
+        },
+        "seq": {
+          "$ref": "#/$defs/Sequence"
+        }
+      },
+      "required": [
+        "type",
+        "seq"
+      ],
+      "additionalProperties": true
+    },
+    "join": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "join"
+        },
+        "clientSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "baseSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "name": {
+          "type": "string"
+        },
+        "seatToken": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "name"
+      ],
+      "additionalProperties": true,
+      "$comment": "seatToken is used on reconnect; first-join issuance/response and envelope sequencing remain E11/E13."
+    },
+    "submitDeck": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "submitDeck"
+        },
+        "clientSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "baseSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "text"
+      ],
+      "additionalProperties": true
+    },
+    "ready": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "ready"
+        },
+        "clientSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "baseSeq": {
+          "$ref": "#/$defs/Sequence"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": true
+    },
+    "startGame": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "startGame"
+        },
+        "clientSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "baseSeq": {
+          "$ref": "#/$defs/Sequence"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": true
+    },
+    "lobbySettings": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "lobbySettings"
+        },
+        "clientSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "baseSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "startingLife": {
+          "$ref": "#/$defs/Int32",
+          "$comment": "forge-game/src/main/java/forge/game/player/RegisteredPlayer.java:63"
+        },
+        "clock": {
+          "enum": [
+            "untimed",
+            30,
+            45
+          ]
+        },
+        "notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": true,
+      "$comment": "Plan values/default 40; update/replace semantics and mixed clock representation require E11."
+    },
+    "selectCard": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "selectCard"
+        },
+        "clientSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "baseSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "cardId": {
+          "$ref": "#/$defs/CardRef"
+        },
+        "button": {
+          "type": "integer",
+          "enum": [
+            1,
+            3
+          ]
+        },
+        "otherCardIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CardRef"
+          }
+        }
+      },
+      "required": [
+        "type",
+        "clientSeq",
+        "baseSeq",
+        "cardId"
+      ],
+      "additionalProperties": true
+    },
+    "selectPlayer": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "selectPlayer"
+        },
+        "clientSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "baseSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "playerId": {
+          "$ref": "#/$defs/PlayerRef"
+        }
+      },
+      "required": [
+        "type",
+        "clientSeq",
+        "baseSeq",
+        "playerId"
+      ],
+      "additionalProperties": true
+    },
+    "selectAbility": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "selectAbility"
+        },
+        "clientSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "baseSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "abilityId": {
+          "$ref": "#/$defs/Int32"
+        }
+      },
+      "required": [
+        "type",
+        "clientSeq",
+        "baseSeq",
+        "abilityId"
+      ],
+      "additionalProperties": true
+    },
+    "selectStackItem": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "selectStackItem"
+        },
+        "clientSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "baseSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "stackId": {
+          "$ref": "#/$defs/Int32"
+        }
+      },
+      "required": [
+        "type",
+        "clientSeq",
+        "baseSeq",
+        "stackId"
+      ],
+      "additionalProperties": true
+    },
+    "ok": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "ok"
+        },
+        "clientSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "baseSeq": {
+          "$ref": "#/$defs/Sequence"
+        }
+      },
+      "required": [
+        "type",
+        "clientSeq",
+        "baseSeq"
+      ],
+      "additionalProperties": true
+    },
+    "cancel": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "cancel"
+        },
+        "clientSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "baseSeq": {
+          "$ref": "#/$defs/Sequence"
+        }
+      },
+      "required": [
+        "type",
+        "clientSeq",
+        "baseSeq"
+      ],
+      "additionalProperties": true
+    },
+    "undo": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "undo"
+        },
+        "clientSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "baseSeq": {
+          "$ref": "#/$defs/Sequence"
+        }
+      },
+      "required": [
+        "type",
+        "clientSeq",
+        "baseSeq"
+      ],
+      "additionalProperties": true
+    },
+    "concede": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "concede"
+        },
+        "clientSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "baseSeq": {
+          "$ref": "#/$defs/Sequence"
+        }
+      },
+      "required": [
+        "type",
+        "clientSeq",
+        "baseSeq"
+      ],
+      "additionalProperties": true
+    },
+    "macroRecord": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "macroRecord"
+        },
+        "clientSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "baseSeq": {
+          "$ref": "#/$defs/Sequence"
+        }
+      },
+      "required": [
+        "type",
+        "clientSeq",
+        "baseSeq"
+      ],
+      "additionalProperties": true
+    },
+    "macroNext": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "macroNext"
+        },
+        "clientSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "baseSeq": {
+          "$ref": "#/$defs/Sequence"
+        }
+      },
+      "required": [
+        "type",
+        "clientSeq",
+        "baseSeq"
+      ],
+      "additionalProperties": true
+    },
+    "resync": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "resync"
+        },
+        "clientSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "baseSeq": {
+          "$ref": "#/$defs/Sequence"
+        }
+      },
+      "required": [
+        "type",
+        "clientSeq",
+        "baseSeq"
+      ],
+      "additionalProperties": true
+    },
+    "ping": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "ping"
+        },
+        "clientSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "baseSeq": {
+          "$ref": "#/$defs/Sequence"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": true
+    },
+    "useMana": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "useMana"
+        },
+        "clientSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "baseSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "color": {
+          "type": "integer",
+          "minimum": -128,
+          "maximum": 127,
+          "$comment": "forge-gui/src/main/java/forge/interfaces/IGameController.java:29"
+        }
+      },
+      "required": [
+        "type",
+        "clientSeq",
+        "baseSeq",
+        "color"
+      ],
+      "additionalProperties": true
+    },
+    "declareAttacker": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "declareAttacker"
+        },
+        "clientSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "baseSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "attackerId": {
+          "$ref": "#/$defs/CardRef"
+        },
+        "defenderId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CardRef"
+            },
+            {
+              "$ref": "#/$defs/PlayerRef"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "clientSeq",
+        "baseSeq",
+        "attackerId",
+        "defenderId"
+      ],
+      "additionalProperties": true
+    },
+    "undeclareAttacker": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "undeclareAttacker"
+        },
+        "clientSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "baseSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "attackerId": {
+          "$ref": "#/$defs/CardRef"
+        }
+      },
+      "required": [
+        "type",
+        "clientSeq",
+        "baseSeq",
+        "attackerId"
+      ],
+      "additionalProperties": true
+    },
+    "declareBlocker": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "declareBlocker"
+        },
+        "clientSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "baseSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "blockerId": {
+          "$ref": "#/$defs/CardRef"
+        },
+        "attackerId": {
+          "$ref": "#/$defs/CardRef"
+        }
+      },
+      "required": [
+        "type",
+        "clientSeq",
+        "baseSeq",
+        "blockerId",
+        "attackerId"
+      ],
+      "additionalProperties": true
+    },
+    "undeclareBlocker": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "undeclareBlocker"
+        },
+        "clientSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "baseSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "blockerId": {
+          "$ref": "#/$defs/CardRef"
+        }
+      },
+      "required": [
+        "type",
+        "clientSeq",
+        "baseSeq",
+        "blockerId"
+      ],
+      "additionalProperties": true
+    },
+    "attackAll": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "attackAll"
+        },
+        "clientSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "baseSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "defenderId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CardRef"
+            },
+            {
+              "$ref": "#/$defs/PlayerRef"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "clientSeq",
+        "baseSeq",
+        "defenderId"
+      ],
+      "additionalProperties": true
+    },
+    "reorderHand": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "reorderHand"
+        },
+        "clientSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "baseSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "cardId": {
+          "$ref": "#/$defs/CardRef"
+        },
+        "index": {
+          "$ref": "#/$defs/Int32",
+          "$comment": "forge-gui/src/main/java/forge/interfaces/IGameController.java:54"
+        }
+      },
+      "required": [
+        "type",
+        "clientSeq",
+        "baseSeq",
+        "cardId",
+        "index"
+      ],
+      "additionalProperties": true
+    },
+    "promptReply": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "promptReply"
+        },
+        "clientSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "baseSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "requestId": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "result": {
+          "$ref": "#/$defs/PromptResult"
+        }
+      },
+      "required": [
+        "type",
+        "requestId",
+        "result"
+      ],
+      "additionalProperties": true
+    },
+    "setYield": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "setYield"
+        },
+        "clientSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "baseSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "setMarker",
+            "clearMarker",
+            "stackYield",
+            "untilEndOfTurn",
+            "cardAutoYield",
+            "triggerDecision",
+            "disableYields",
+            "disableTriggers",
+            "skipPhase",
+            "pref",
+            "seed",
+            "clearAbilityOrders"
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "clientSeq",
+        "baseSeq",
+        "kind"
+      ],
+      "additionalProperties": true,
+      "allOf": [
+        {
+          "$ref": "#/$defs/YieldUpdate"
+        }
+      ]
+    },
+    "macroRepeat": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "macroRepeat"
+        },
+        "clientSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "baseSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "type",
+        "clientSeq",
+        "baseSeq",
+        "count"
+      ],
+      "additionalProperties": true,
+      "$comment": "Plan 3.2 repeats the parameterless method, stopping if a prompt opens; maximum count needs E13."
+    },
+    "nextGame": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "nextGame"
+        },
+        "clientSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "baseSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "decision": {
+          "type": "string",
+          "enum": [
+            "rematch",
+            "quit"
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "clientSeq",
+        "baseSeq",
+        "decision"
+      ],
+      "additionalProperties": true,
+      "$comment": "NextGameDecision.java:3 has NEW, CONTINUE, QUIT; rematch mapping remains E4."
+    },
+    "describeAbility": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "describeAbility"
+        },
+        "clientSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "baseSeq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "cardId": {
+          "$ref": "#/$defs/CardRef"
+        }
+      },
+      "required": [
+        "type",
+        "clientSeq",
+        "baseSeq",
+        "cardId"
+      ],
+      "additionalProperties": true,
+      "$comment": "E1: Forge returns String but no reply message is defined in plan."
+    },
+    "ServerMessage": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/hello"
+        },
+        {
+          "$ref": "#/$defs/lobby"
+        },
+        {
+          "$ref": "#/$defs/deckResult"
+        },
+        {
+          "$ref": "#/$defs/state"
+        },
+        {
+          "$ref": "#/$defs/event"
+        },
+        {
+          "$ref": "#/$defs/log"
+        },
+        {
+          "$ref": "#/$defs/logTail"
+        },
+        {
+          "$ref": "#/$defs/prompt"
+        },
+        {
+          "$ref": "#/$defs/promptCancel"
+        },
+        {
+          "$ref": "#/$defs/message"
+        },
+        {
+          "$ref": "#/$defs/macroState"
+        },
+        {
+          "$ref": "#/$defs/clock"
+        },
+        {
+          "$ref": "#/$defs/yieldState"
+        },
+        {
+          "$ref": "#/$defs/pong"
+        }
+      ]
+    },
+    "ClientMessage": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/join"
+        },
+        {
+          "$ref": "#/$defs/submitDeck"
+        },
+        {
+          "$ref": "#/$defs/ready"
+        },
+        {
+          "$ref": "#/$defs/startGame"
+        },
+        {
+          "$ref": "#/$defs/lobbySettings"
+        },
+        {
+          "$ref": "#/$defs/selectCard"
+        },
+        {
+          "$ref": "#/$defs/selectPlayer"
+        },
+        {
+          "$ref": "#/$defs/selectAbility"
+        },
+        {
+          "$ref": "#/$defs/selectStackItem"
+        },
+        {
+          "$ref": "#/$defs/ok"
+        },
+        {
+          "$ref": "#/$defs/cancel"
+        },
+        {
+          "$ref": "#/$defs/undo"
+        },
+        {
+          "$ref": "#/$defs/concede"
+        },
+        {
+          "$ref": "#/$defs/macroRecord"
+        },
+        {
+          "$ref": "#/$defs/macroNext"
+        },
+        {
+          "$ref": "#/$defs/resync"
+        },
+        {
+          "$ref": "#/$defs/ping"
+        },
+        {
+          "$ref": "#/$defs/useMana"
+        },
+        {
+          "$ref": "#/$defs/declareAttacker"
+        },
+        {
+          "$ref": "#/$defs/undeclareAttacker"
+        },
+        {
+          "$ref": "#/$defs/declareBlocker"
+        },
+        {
+          "$ref": "#/$defs/undeclareBlocker"
+        },
+        {
+          "$ref": "#/$defs/attackAll"
+        },
+        {
+          "$ref": "#/$defs/reorderHand"
+        },
+        {
+          "$ref": "#/$defs/promptReply"
+        },
+        {
+          "$ref": "#/$defs/setYield"
+        },
+        {
+          "$ref": "#/$defs/macroRepeat"
+        },
+        {
+          "$ref": "#/$defs/nextGame"
+        },
+        {
+          "$ref": "#/$defs/describeAbility"
+        }
+      ]
+    }
+  }
+}
