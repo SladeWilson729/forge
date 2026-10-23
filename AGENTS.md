@@ -1,5 +1,7 @@
 # AGENTS.md: Forge Arena (fork of Card-Forge/forge)
 
+Priorities, in order: correct, then matches Forge's existing patterns, then minimal. When unsure, read more source before writing code.
+
 ## What this repo is
 A fork of the Forge MTG rules engine. We add ONE new Maven module, `forge-arena-server`,
 which runs Forge headless as a game server for a Unity client (separate repo, not here).
