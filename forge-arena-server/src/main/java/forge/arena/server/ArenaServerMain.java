@@ -22,6 +22,7 @@ import java.util.Collections;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 /** Boots Forge and plays one four-player Commander game without a window. */
 public final class ArenaServerMain {
@@ -70,10 +71,11 @@ public final class ArenaServerMain {
         // The game type alone does not set GameRules.hasCommander().
         match.startMatch(GameType.Commander, EnumSet.of(GameType.Commander), players, Collections.emptyMap());
         final Game game = match.getGame();
-        while (!game.isGameOver()) {
-            Thread.sleep(100);
+        final long limit = Long.getLong("arena.timeoutMinutes", 30L);
+        if (!finished.await(limit, TimeUnit.MINUTES) || !game.isGameOver()) {
+            System.err.println("[arena] Game did not finish within " + limit + " minutes");
+            System.exit(1);
         }
-        finished.await();
         final GameOutcome outcome = game.getOutcome();
         System.out.println("[arena] Winner: " + (outcome.isDraw() ? "Draw" : outcome.getWinningLobbyPlayer().getName()));
         // Forge owns background executors and the Swing EDT; this standalone process is finished.

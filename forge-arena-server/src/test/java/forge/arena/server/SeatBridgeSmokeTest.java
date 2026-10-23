@@ -41,6 +41,7 @@ import java.util.concurrent.TimeUnit;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertTrue;
+import static org.testng.Assert.fail;
 
 /** A real human controller and three AIs play Commander through an in-process seat bridge. */
 public class SeatBridgeSmokeTest {
@@ -48,6 +49,7 @@ public class SeatBridgeSmokeTest {
         private final Set<ProtocolMethod> methods = ConcurrentHashMap.newKeySet();
         private final BlockingQueue<GuiGameEvent> buttonPrompts = new LinkedBlockingQueue<>();
         private volatile TrackableCollection<PlayerView> myPlayers;
+        volatile String unscripted;
 
         private void record(final GuiGameEvent event) {
             if (methods.add(event.getMethod())) {
@@ -95,7 +97,10 @@ public class SeatBridgeSmokeTest {
                 case confirm -> args[2];
                 case showConfirmDialog, showOptionDialog -> args[4];
                 case showInputDialog -> args[3];
-                default -> throw new AssertionError("Unscripted blocking call: " + guiEvent.getMethod());
+                default -> {
+                    unscripted = guiEvent.getMethod().name();
+                    throw new AssertionError("Unscripted blocking call: " + guiEvent.getMethod());
+                }
             };
         }
     }
@@ -142,6 +147,7 @@ public class SeatBridgeSmokeTest {
             assertTrue(game.getRules().hasCommander());
             final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(180);
             while (!game.isGameOver() && System.nanoTime() < deadline) {
+                if (remote.unscripted != null) fail("Unscripted blocking call: " + remote.unscripted);
                 final GuiGameEvent buttons = remote.buttonPrompts.poll(100, TimeUnit.MILLISECONDS);
                 if (buttons == null) {
                     continue;
