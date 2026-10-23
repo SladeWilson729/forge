@@ -1,8 +1,8 @@
 # Forge Arena protocol catalog and schema
 
-Generated against Forge 2.0.16-SNAPSHOT at commit 613e45fb65
+Generated against Forge 2.0.16-SNAPSHOT at commit f483a4a6b4
 
-This is the v1 draft from project plan v10, sections 2.1, 2.2, 2.5, 2.6, 3 and 7.8. It documents a future bridge; it does not describe the Phase 0 opening-hand WebSocket payload. Open questions in section E are intentionally unresolved. The schema types source-supported values and leaves explicitly unresolved payloads open; passing schema validation alone is not authorization or a guarantee of per-seat visibility.
+This is the v1 draft from project plan v10, sections 2.1, 2.2, 2.5, 2.6, 3 (including decisions in 3.5) and 7.8. It documents a future bridge; it does not describe the Phase 0 opening-hand WebSocket payload. Section E records the plan 3.5 decisions and defaults, with the tasks that finish each default. The schema types source-supported values and leaves explicitly unresolved payloads open; passing schema validation alone is not authorization or a guarantee of per-seat visibility.
 
 Sources are repository-relative to this commit. The enum signatures below preserve erased class types from [ProtocolMethod](../forge-gui/src/main/java/forge/gamemodes/net/ProtocolMethod.java); generic meanings are described in mappings and section D. [ProtocolGuiGame](../forge-gui/src/main/java/forge/gamemodes/net/ProtocolGuiGame.java), [IGuiGame](../forge-gui/src/main/java/forge/gui/interfaces/IGuiGame.java), [IGameController](../forge-gui/src/main/java/forge/interfaces/IGameController.java), [IMacroSystem](../forge-gui/src/main/java/forge/interfaces/IMacroSystem.java), [NetworkGuiGame](../forge-gui/src/main/java/forge/gamemodes/net/NetworkGuiGame.java), and [AbstractGuiGame](../forge-gui/src/main/java/forge/gamemodes/match/AbstractGuiGame.java) are the implementation sources. [ProtocolGuiGameInProcessTest](../forge-gui-desktop/src/test/java/forge/net/embedded/ProtocolGuiGameInProcessTest.java) verifies an embedded IRemote receives full views, state deltas, raw events and blocking calls while actions run on the EDT; its script is not an exhaustive prompt contract.
 
@@ -17,21 +17,21 @@ Sources are repository-relative to this commit. The enum signatures below preser
 | `afterGameEnd` | SERVER | void | none | syncAndSend | no | event.kind=gameOver from outcome stream; state reflects final game; no distinct lifecycle message (E10) |
 | `showCombat` | SERVER | void | none | syncAndSend | no | state.players[].zones.battlefield: attacking/blocking/attackTarget from refreshed combat |
 | `showPromptMessage` | SERVER | void | PlayerView, String, CardView | send / syncAndSend | no | state.activeInput.prompt; card context has no named activeInput field (E7) |
-| `updateDrawOffer` | SERVER | void | DrawOfferMessage.Status | send | no | ignored: plan 3.3 explicitly excludes draw offers in v1 |
+| `updateDrawOffer` | SERVER | void | DrawOfferMessage.Status | send | no | ignored: decided out of v1 (plan 3.5 E12) |
 | `updateButtons` | SERVER | void | PlayerView, String, String, boolean, boolean, boolean | send | no | state.activeInput.okLabel/cancelLabel/buttons.*.enabled; focus1 and owner not represented (E7) |
-| `flashIncorrectAction` | SERVER | void | none | send | no | message.level=rejected; Forge call has no reason text (E3) |
-| `alertUser` | SERVER | void | none | send | no | ignored: no attention notification message specified; pending E10 |
-| `enableOverlay` | SERVER | void | none | send | no | ignored: no overlay field/message specified; pending E10 |
-| `disableOverlay` | SERVER | void | none | send | no | ignored: no overlay field/message specified; pending E10 |
-| `finishGame` | SERVER | void | none | syncAndSend | no | ignored: no distinct finish-view message; gameOver event is outcome-driven; pending E10 |
+| `flashIncorrectAction` | SERVER | void | none | send | no | message.level=rejected with generic text; Forge call has no reason text (plan 3.5 E3) |
+| `alertUser` | SERVER | void | none | send | no | attention: type and seq only; taskbar flash when the action is on this seat (plan 3.5 E10) |
+| `enableOverlay` | SERVER | void | none | send | no | ignored: no overlay field/message specified; decided local/ignored in plan 3.5 E10 |
+| `disableOverlay` | SERVER | void | none | send | no | ignored: no overlay field/message specified; decided local/ignored in plan 3.5 E10 |
+| `finishGame` | SERVER | void | none | syncAndSend | no | ignored: no distinct finish-view message; gameOver event is outcome-driven; decided local/ignored in plan 3.5 E10 |
 | `showManaPool` | SERVER | void | PlayerView | send | no | state.activeInput: payment UI intent (exact field absent; E7) |
 | `hideManaPool` | SERVER | void | PlayerView | send | no | state.activeInput: end payment UI intent (exact field absent; E7) |
-| `setPanelSelection` | SERVER | void | CardView | syncAndSend | no | ignored: no panel-focus field specified; pending E10 |
+| `setPanelSelection` | SERVER | void | CardView | syncAndSend | no | ignored: no panel-focus field specified; decided local/ignored in plan 3.5 E10 |
 | `getAbilityToPlay` | SERVER | SpellAbilityView | CardView, List, ITriggerEvent | syncAndSendAndWait | yes | prompt.kind=chooseAbility, sourceCardId=hostCard, options=[{abilityId,text}]; promptReply.result=abilityId |
 | `assignCombatDamage` | SERVER | Map | CardView, List, int, GameEntityView, boolean, boolean | syncAndSendAndWait | yes | prompt.kind=assignCombatDamage, sourceCardId=attacker, options=blockers; damage/defender/flags and allocation result encoding E5 |
 | `assignGenericAmount` | SERVER | Map | CardView, Map, int, boolean, String | syncAndSendAndWait | yes | prompt.kind=assignGeneric, sourceCardId=effectSource; targets/amount/atLeastOne/amountLabel and allocation result encoding E5 |
-| `message` | SERVER | void | String, String | send | no | message.text=message; info level/title representation E3 |
-| `showErrorDialog` | SERVER | void | String, String | send | no | message.text=message; error level/title representation E3 |
+| `message` | SERVER | void | String, String | send | no | message.level=info, text=message, optional title=title (plan 3.5 E3) |
+| `showErrorDialog` | SERVER | void | String, String | send | no | message.level=error, text=message, optional title=title (plan 3.5 E3) |
 | `showConfirmDialog` | SERVER | boolean | String, String, String, String, boolean | sendAndWait | yes | prompt.kind=confirm, title=title; text/buttons/defaultYes result boolean (E5) |
 | `showOptionDialog` | SERVER | int | String, String, FSkinProp, List, int | syncAndSendAndWait | yes | prompt.kind=option, title=title, options=options; result integer index; icon/defaultOption/text E5 |
 | `showInputDialog` | SERVER | String | String, String, FSkinProp, String, List, boolean | syncAndSendAndWait | yes | prompt.kind=number if isNumeric, otherwise text; title=title, options=inputOptions; result String or null; initialInput/icon/text E5 |
@@ -42,10 +42,10 @@ Sources are repository-relative to this commit. The enum signatures below preser
 | `chooseSingleEntityForEffect` | SERVER | GameEntityView | String, List, DelayedReveal, boolean | syncAndSendAndWait | yes | prompt.kind=chooseEntities, title=title, options=optionList; min=0 if optional else 1, max=1; scalar result and delayedReveal E5 |
 | `chooseEntitiesForEffect` | SERVER | List | String, List, int, int, DelayedReveal | syncAndSendAndWait | yes | prompt.kind=chooseEntities, title=title, options=optionList, min=min, max=max; list result and delayedReveal E5 |
 | `manipulateCardList` | SERVER | List | String, Iterable, Iterable, boolean, boolean, boolean | syncAndSendAndWait | yes | prompt.kind=manipulateList, title=title, options=cards; manipulable/destination flags and ordered result E5 |
-| `setCard` | SERVER | void | CardView | syncAndSend | no | ignored: preview card has no named field/message; pending E10 |
+| `setCard` | SERVER | void | CardView | syncAndSend | no | ignored: preview card has no named field/message; decided local/ignored in plan 3.5 E10 |
 | `setSelection` | SERVER | void | Selection | syncAndSend | no | state.activeInput.chosen/min/max/targets/selectable (last two encodings E7/E8) |
 | `showRevealedCards` | SERVER | void | Iterable | syncAndSend | no | event.kind=reveal, cardIds=filtered cards; temporary visibility from preceding sync |
-| `hideRevealedCards` | SERVER | void | none | send | no | ignored: plan has reveal but no clear-reveal message; pending E10 |
+| `hideRevealedCards` | SERVER | void | none | send | no | ignored: plan has reveal but no clear-reveal message; decided local/ignored in plan 3.5 E10 |
 | `setWeaklySelectable` | SERVER | void | Iterable | send (after updateGameView) | no | state.activeInput.highlighted[].id/strength (duplicates retain strength) |
 | `clearWeaklySelectable` | SERVER | void | none | send (after updateGameView) | no | state.activeInput.highlighted=[] |
 | `awaitNextInput` | SERVER | void | none | send | no | state.activeInput.kind=waiting (no reply wait) |
@@ -60,10 +60,10 @@ Sources are repository-relative to this commit. The enum signatures below preser
 | `selectButtonCancel` | CLIENT | void | none | not sent by ProtocolGuiGame | no | cancel |
 | `selectAbility` | CLIENT | void | SpellAbilityView | not sent by ProtocolGuiGame | no | selectAbility.abilityId (non-prompt Input path only) |
 | `selectStackItem` | CLIENT | void | StackItemView | not sent by ProtocolGuiGame | no | selectStackItem.stackId |
-| `nextGameDecision` | CLIENT | void | NextGameDecision | not sent by ProtocolGuiGame | no | nextGame.decision; enum mapping E4 |
-| `getActivateDescription` | CLIENT | String | CardView | not sent by ProtocolGuiGame | yes | describeAbility.cardId; missing reply message E1 |
+| `nextGameDecision` | CLIENT | void | NextGameDecision | not sent by ProtocolGuiGame | no | nextGame.decision: rematch -> NextGameDecision.NEW, quit -> QUIT; CONTINUE unused (one game per match) |
+| `getActivateDescription` | CLIENT | String | CardView | not sent by ProtocolGuiGame | yes | describeAbility.cardId -> abilityDescription.cardId/text; finished in task 1.12 area |
 | `concede` | CLIENT | void | none | not sent by ProtocolGuiGame | no | concede |
-| `drawOfferAction` | CLIENT | void | DrawOfferMessage.Action | not sent by ProtocolGuiGame | no | ignored: plan 3.3 explicitly excludes draw offers in v1 |
+| `drawOfferAction` | CLIENT | void | DrawOfferMessage.Action | not sent by ProtocolGuiGame | no | ignored: decided out of v1 (plan 3.5 E12) |
 | `alphaStrike` | CLIENT | void | none | not sent by ProtocolGuiGame | no | attackAll.defenderId then alphaStrike |
 | `reorderHand` | CLIENT | void | CardView, int | not sent by ProtocolGuiGame | no | reorderHand.cardId/index |
 | `requestResync` | CLIENT | void | none | not sent by ProtocolGuiGame | no | ignored: PlayerControllerHuman implementation is a no-op; resync uses cache plus ProtocolGuiGame.setResyncPending() |
@@ -143,7 +143,7 @@ All public method names are listed, including default methods. A getter or local
 | `mayLookAtAllCards` | not exposed: developer visibility query; server filters each seat |
 | `canPlayUnlimitedLands` | not exposed: developer rules query |
 | `concede` | concede |
-| `drawOfferAction` | not exposed: explicitly ignored in plan 3.3; confirm exclusion in E12 |
+| `drawOfferAction` | ignored: decided out of v1 (plan 3.5 E12) |
 | `alphaStrike` | attackAll.defenderId then alphaStrike |
 | `useMana` | useMana.color |
 | `selectButtonOk` | ok |
@@ -155,8 +155,8 @@ All public method names are listed, including default methods. A getter or local
 | `undoLastAction` | undo |
 | `cheat` | not exposed: developer cheat object |
 | `macros` | not exposed: local accessor; its three transported operations are below |
-| `nextGameDecision` | nextGame.decision; enum mapping E4 |
-| `getActivateDescription` | describeAbility.cardId; missing reply message E1 |
+| `nextGameDecision` | nextGame.decision: rematch -> NextGameDecision.NEW, quit -> QUIT; CONTINUE unused (one game per match) |
+| `getActivateDescription` | describeAbility.cardId -> abilityDescription.cardId/text; finished in task 1.12 area |
 | `reorderHand` | reorderHand.cardId/index |
 | `requestResync` | not exposed: no-op on PlayerControllerHuman; resync uses cached JSON then setResyncPending |
 | `shouldAutoYield` | not exposed: local yield query |
@@ -193,9 +193,9 @@ All public method names are listed, including default methods. A getter or local
 
 Every message is an object discriminated by `type`. Root schema accepts either union; the named entry points are `#/$defs/ServerMessage` and `#/$defs/ClientMessage`, each a oneOf of message definitions with a distinct `properties.type.const`. This uses standard JSON Schema references, not the OpenAPI discriminator keyword.
 
-All server messages require `seq: integer >= 0`, increasing per seat. Client game actions require `clientSeq` and `baseSeq` of that type; `baseSeq` is the state the player saw. Prompt replies require `requestId` and `result`. For lobby/heartbeat/promptReply envelopes the two sequence fields are allowed but not required while E13 is open. Message-specific fields marked `?` are not universally required; this is a draft, not a decision that Forge-required prompt context can be omitted. Extra envelope fields are allowed while the plan gaps are open. Shared definitions with no declared type explicitly mark a representation the plan and sources do not yet determine.
+All server messages require `seq: integer >= 0`, increasing per seat. Client game actions require `clientSeq` and `baseSeq` of that type; `baseSeq` is the state the player saw. Prompt replies require `requestId` and `result`. Only game actions require clientSeq/baseSeq (plan 3.5 E13); the existing lobby/heartbeat/promptReply behavior is retained: these fields are allowed but not required. Message-specific fields marked `?` are not universally required; this is a draft, not a decision that Forge-required prompt context can be omitted. Extra envelope fields are allowed while the plan gaps are open. Shared definitions with no declared type explicitly mark a representation the plan and sources do not yet determine.
 
-`CardRef` is integer (visible) or opaque string (hidden); `PlayerRef`, abilityId and stackId are Java-int identities, not array positions. All ids in every direction pass through per-seat IdMapper; clients cannot act on hidden ids except when explicitly offered by their current prompt. `requestId` uses the existing IdentifiableNetEvent/IIdentifiable integer correlation type; persistence/reconnect namespace remains E13.
+`CardRef` is integer (visible) or opaque string (hidden); `PlayerRef`, abilityId and stackId are Java-int identities, not array positions. All ids in every direction pass through per-seat IdMapper; clients cannot act on hidden ids except when explicitly offered by their current prompt. `requestId` uses the existing IdentifiableNetEvent/IIdentifiable integer correlation type; plan 3.5 E13 scopes 32-bit integer ids to one game, with implementation finished in task 1.4. The existing opaque CardRef string alternative is retained; E8 shapes are finished in task 1.2.
 
 ### Server to client
 
@@ -206,23 +206,25 @@ All server messages require `seq: integer >= 0`, increasing per seat. Client gam
 | `deckResult` | `ok`: boolean; `errors`: array of string | New DeckImport; no ProtocolMethod |
 | `state` | `turn`: `Int32`; `activePlayerId`: `PlayerRef` or null; `priorityPlayerId`: `PlayerRef` or null; `phase`: `PhaseType` or null; `monarchId`: `PlayerRef` or null; `initiativeId`: `PlayerRef` or null; `players`: array of `Player`; `stack`: array of `StackItem`; `activeInput`: `ActiveInput` | setGameView and applyDelta with objects; display calls update activeInput |
 | `event` | `kind`: `EventKind`; `stateSeq`: `Sequence`; `cardIds?`: array of `CardRef`; `playerIds?`: array of `PlayerRef`; `from?`: `ZoneRef` or null; `to?`: `ZoneRef` or null; `amount?`: `Int32`; `result?`: JSON value (unresolved; see $comment) | applyDelta.events / handleGameEvents and showRevealedCards; source table below |
-| `log` | `text`: string | GameEventAddLog.message via GameLog/GameLogEntry, PayloadFilter |
-| `logTail` | none specified (see note below) | Last 200 filtered log entries on reconnect/resync; no separate Forge call |
+| `log` | `text`: string; `entryType`: `GameLogEntryType` | GameEventAddLog.message via GameLog/GameLogEntry, PayloadFilter |
+| `logTail` | `entries`: array of `LogEntry` ({text: string, entryType: GameLogEntryType, seq: Sequence}) | Last 200 filtered log entries on reconnect/resync; no separate Forge call |
 | `prompt` | `requestId`: `RequestId`; `kind`: `PromptKind`; `title?`: string; `options?`: array of `PromptOption`; `min?`: `Int32`; `max?`: `Int32`; `sourceCardId?`: `CardRef` or null | All 13 blocking SERVER entries in A; helper table below |
 | `promptCancel` | `requestId`: `RequestId` | New pending-request lifecycle; no ProtocolMethod equivalent |
-| `message` | `level`: string; `text`: string | message, showErrorDialog, flashIncorrectAction; ActionRouter stale-action rejection |
+| `message` | `level`: enum `"info"`, `"warning"`, `"error"`, `"rejected"`; `text`: string; `title?`: string | message, showErrorDialog, flashIncorrectAction; ActionRouter stale-action rejection |
 | `macroState` | `recording`: boolean; `replaying`: boolean; `hasActions`: boolean | applyMacroState(IMacroSystem.State) |
 | `clock` | none specified (see note below) | New timed-seat service; no ProtocolMethod |
 | `yieldState` | `kind`: enum `"setMarker"`, `"clearMarker"`, `"stackYield"`, `"untilEndOfTurn"`, `"cardAutoYield"`, `"triggerDecision"`, `"disableYields"`, `"disableTriggers"`, `"skipPhase"`, `"pref"`, `"seed"`, `"clearAbilityOrders"` | applyYieldUpdate(YieldUpdate) |
 | `pong` | none specified (see note below) | WsServer heartbeat reply; no ProtocolMethod |
+| `attention` | none | alertUser; taskbar flash when the action is on this seat and the window is not focused |
+| `abilityDescription` | `cardId`: `CardRef`; `text`: string | getActivateDescription reply to describeAbility; finished in task 1.12 area |
 
-`lobby` describes seats, names (strings), deck status (representation unspecified), ready flags (booleans); exact nesting is E11. `deckResult` also needs parsed commander (identity representation unspecified) and count (integer), whose field names are absent from 3.1. `clock` contains per-seat `remainingMs: integer >= 0` and `running: boolean` (`SeatClock`), but its container and seat-id field are unspecified. `logTail` is mentioned in prose, not the plan table: its type is reserved here without choosing an entries envelope. `log.type` is fixed to `log`; a second field for the GameLogEntryType is unresolved. `pong` has no further plan fields.
+`lobby` describes seats, names (strings), deck status (representation unspecified), ready flags (booleans); exact nesting is E11. `deckResult` also needs parsed commander (identity representation unspecified) and count (integer), whose field names are absent from 3.1. `clock` contains per-seat `remainingMs: integer >= 0` and `running: boolean` (`SeatClock`), but its container and seat-id field are unspecified. `logTail.entries` contains the last 200 filtered entries on reconnect/resync; each entry requires text, entryType and its original seq. `log.type` remains `log`, and required `entryType` uses Forge enum names rather than captions (plan 3.5 E2; finished in task 1.8). GameLogEntryType values: `GAME_OUTCOME`, `MATCH_RESULTS`, `TURN`, `MULLIGAN`, `ANTE`, `DRAFT`, `ZONE_CHANGE`, `PLAYER_CONTROL`, `DAMAGE`, `LIFE`, `LAND`, `DISCARD`, `COMBAT`, `INFORMATION`, `STACK_RESOLVE`, `STACK_ADD`, `EFFECT_REPLACED`, `MANA`, `PHASE`. `pong` has no further plan fields.
 
 ### Client to server
 
 | Type | Fields beyond type/clientSeq/baseSeq | Consumer |
 |---|---|---|
-| `join` | `name`: string; `seatToken?`: string | New Lobby/reconnect authentication |
+| `join` | `name`: string; `seatToken?`: string; `protocolVersion`: const `1` | New Lobby/reconnect authentication |
 | `submitDeck` | `text`: string | New DeckImport; DeckRecognizer and Commander validation planned |
 | `ready` | none | New Lobby readiness |
 | `startGame` | none | New Lobby host start; HostedMatch startMatch later |
@@ -248,9 +250,9 @@ All server messages require `seq: integer >= 0`, increasing per seat. Client gam
 | `reorderHand` | `cardId`: `CardRef`; `index`: `Int32` | IGameController.reorderHand |
 | `promptReply` | `requestId`: `RequestId`; `result`: `PromptResult` | Completes JsonSeatRemote pending future directly; Forge receives converted return value |
 | `setYield` | `kind`: enum `"setMarker"`, `"clearMarker"`, `"stackYield"`, `"untilEndOfTurn"`, `"cardAutoYield"`, `"triggerDecision"`, `"disableYields"`, `"disableTriggers"`, `"skipPhase"`, `"pref"`, `"seed"`, `"clearAbilityOrders"` | IGameController.sendYieldUpdate -> applyYieldUpdate |
-| `macroRepeat` | `count`: integer | controller.macros().repeatRememberedActions repeated count times |
-| `nextGame` | `decision`: enum `"rematch"`, `"quit"` | IGameController.nextGameDecision; rematch enum mapping unresolved |
-| `describeAbility` | `cardId`: `CardRef` | IGameController.getActivateDescription; reply missing E1 |
+| `macroRepeat` | `count`: integer 1..99 | controller.macros().repeatRememberedActions repeated count times |
+| `nextGame` | `decision`: enum `"rematch"`, `"quit"` | IGameController.nextGameDecision: rematch -> NEW (same decks, fresh game), quit -> QUIT; CONTINUE unused (one game per match) |
+| `describeAbility` | `cardId`: `CardRef` | IGameController.getActivateDescription -> abilityDescription {cardId, text}; finished in task 1.12 area |
 
 Section 2.5 is more precise than the compressed 3.2 table: undeclareAttacker needs only attackerId, and undeclareBlocker only blockerId. A defender can be a player, planeswalker or battle; raw integer namespaces need E8 resolved. For declareAttacker, do nothing if already attacking that defender, otherwise remove an old assignment, select defender then attacker. For declareBlocker, do nothing if the assignment exists; remove an incompatible old assignment, select the attacker unless already chosen, then select blocker. Each composite runs in one EDT task. `cancel` uses Forge button semantics: during attacks it can alpha-strike or recall attackers, so labels must come from updateButtons.
 
@@ -384,30 +386,82 @@ A snapshot is built only inside Forge-safe setGameView or object-bearing applyDe
 
 ## E. Gaps and questions for Will
 
-These are questions, not implementation decisions. Source-derived draft types are annotated in schema.json with source file and line; unresolved wire layouts remain explicitly open.
+The original task 1.1 questions are retained below, followed by their plan 3.5 decisions or defaults. E4, E10 and E12 are decided. The other items use defaults and are finished in the named tasks; E5, E6, E7, E8, E9 and E11 retain their current schema shapes until then.
 
 - **E1.** Will, what server message and correlation fields should carry the String returned by describeAbility/getActivateDescription? Section 3.2 promises a tooltip reply but 3.1 names none.
 
+  Default (plan 3.5): New server message `abilityDescription {cardId, text}` answers `describeAbility`. Finished in task 1.12 area.
+
+  Status: default, finished in task 1.12 area
+
 - **E2.** Will, what field should hold GameLogEntryType when log.type must remain the discriminator "log"? Is logTail a separate message or a field in another message, and what is its entries envelope?
+
+  Default (plan 3.5): `log` gains `entryType` (Forge `GameLogEntryType`); `logTail` is its own message with `entries[]`. Finished in task 1.8.
+
+  Status: default, finished in task 1.8
 
 - **E3.** Will, what are the allowed message.level values besides rejected, how should message/showErrorDialog titles be represented, and where should the rejection reason come from when flashIncorrectAction supplies no text?
 
+  Default (plan 3.5): `message.level` is one of `info`, `warning`, `error`, `rejected`; optional `title`. `flashIncorrectAction` becomes `rejected` with a generic text; `ActionRouter` rejections carry their own reason. Finished in task 1.8.
+
+  Status: default, finished in task 1.8
+
 - **E4.** Will, does nextGame.decision=rematch mean NextGameDecision.NEW or CONTINUE, and is the other decision intentionally unavailable? Forge exposes NEW, CONTINUE and QUIT.
+
+  Decision (plan 3.5): **Rematch = `NEW`** (same decks, fresh game), quit = `QUIT`; `CONTINUE` unused.
+
+  Status: decided
 
 - **E5.** Will, what are the complete option and reply encodings for each prompt kind, including generic values, single versus multiple entities, nullable/cancel results, OrderResult.rememberDecision, card/byte allocation maps, sideboard PaperCards, initial/default/selected values, icons, delayed reveals, damage/defender/amount context and manipulation flags? Should numeric-dialog replies remain String/null as Forge requires, and how are prompt-bound choice ids scoped?
 
+  Default (plan 3.5): Every prompt option gets a prompt-scoped integer `optionId`; `promptReply` sends option ids (or a number, or text) and the server converts back to Forge's types. Finished in task 1.6.
+
+  Status: default, finished in task 1.6
+
 - **E6.** Will, how should Unity obtain the full-card versus ability-suffix storage keys used by setYield, and how should yieldState preserve player identity and SetMarker.atOrPastAtClick when mirroring Forge? What JSON encoding should YieldStateSnapshot.skipPhases use, and are the copied public seed-record field names the intended wire names?
+
+  Default (plan 3.5): The client sends card and ability ids for yields; the server computes Forge's storage keys. Finished in task 1.13.
+
+  Status: default, finished in task 1.13
 
 - **E7.** Will, what are the complete activeInput kind names and context fields for priority, targeting, mana payment, mulligan and fallback selection? Are selectable/targets the intended names, and where do prompt card, button owner/focus, and showManaPool/hideManaPool state belong?
 
+  Default (plan 3.5): `activeInput` fields are defined per Input kind by `InputInspector`. Finished in task 1.5.
+
+  Status: default, finished in task 1.5
+
 - **E8.** Will, how should mixed player/card/stack/battle references be tagged (including defenderId and flat stack.targets), and how should combat blocker assignments be represented beyond CardView.isBlocking? Are commanderDamage keys commander-card ids or player ids, where does commander tax live, and which card/state fields must be required? Counter key spelling, collector-number/designation access and required public face-down fields need confirmation in task 1.2.
+
+  Default (plan 3.5): Mixed references are tagged objects `{kind: "player" or "card" or "stack", id}`; commander damage and tax shapes are fixed with the getter table. Finished in task 1.2.
+
+  Status: default, finished in task 1.2
 
 - **E9.** Will, what are the per-kind event payloads, zone endpoint shape, counter type/change fields, die-size field and planar-die result encoding? Should plural GameEventRollDice and other currently unlisted events (day/night, flip-onto-battlefield, snapshot restoration) get kinds, and what log fallback/correlation rules apply in task 1.8?
 
+  Default (plan 3.5): Per-kind event payloads are defined with `EventPump`. Finished in task 1.8.
+
+  Status: default, finished in task 1.8
+
 - **E10.** Will, should alertUser, overlay enable/disable, finishGame/afterGameEnd/openView UI lifecycle, setPanelSelection/setCard focus, hideRevealedCards and reveal history, avatar/renderer capability, day/night UI state, and macro cancellation/playback text remain local/ignored, or receive named messages/fields? No corresponding wire representation is specified.
+
+  Decision (plan 3.5): **`alertUser` becomes an `attention` message** (taskbar flash when the action is on you). Every other item in E10 stays local or ignored.
+
+  Status: decided
 
 - **E11.** Will, what are the exact lobby seat/deck-status and deckResult commander/count shapes, clock container and seat identifiers, lobbySettings update semantics and clock encoding, and first-join seat-token issuance/response? These messages belong to new Arena services, not ProtocolMethod. Which lifecycle source emits promptCancel, and which service owns clock/ping/pong scheduling?
 
+  Default (plan 3.5): Lobby, deck result and clock shapes are defined with the lobby work. Finished in task 1.11, 1.12.
+
+  Status: default, finished in task 1.11, 1.12
+
 - **E12.** Will, confirm that drawOfferAction and updateDrawOffer stay ignored: section 3.3 explicitly excludes draw offers in v1, while this task cites drawOfferAction as a possible gap. No replacement message is added here.
 
+  Decision (plan 3.5): **Draw offers stay out of v1** (`drawOfferAction`, `updateDrawOffer` ignored).
+
+  Status: decided
+
 - **E13.** Will, which non-game messages require clientSeq/baseSeq, how are sequence/request ids sized and scoped across reconnects/games, what bounds apply to macroRepeat.count, and where/how is the client protocolVersion reported for the mutual mismatch check? The current join fields do not carry a client version.
+
+  Default (plan 3.5): Only game actions carry `clientSeq` and `baseSeq`; ids are 32-bit integers scoped to one game; `join` carries the client's `protocolVersion`; `macroRepeat.count` is capped at 99. Finished in task 1.4.
+
+  Status: default, finished in task 1.4

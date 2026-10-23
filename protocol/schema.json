@@ -35,11 +35,11 @@
     "Sequence": {
       "type": "integer",
       "minimum": 0,
-      "$comment": "Plan 3: monotonic per-seat seq/clientSeq/baseSeq. Counter width and rollover are unspecified (E13)."
+      "$comment": "Plan 3: monotonic per-seat seq; clientSeq/baseSeq required only on game actions (plan 3.5 E13). Sequence handling finished in task 1.4."
     },
     "RequestId": {
       "$ref": "#/$defs/Int32",
-      "$comment": "forge-game/src/main/java/forge/game/IIdentifiable.java:4 — Existing IdentifiableNetEvent inherits this correlation type; JSON id lifetime/reconnect policy still needs E13."
+      "$comment": "forge-game/src/main/java/forge/game/IIdentifiable.java:4 — Plan 3.5 E13: 32-bit integer ids scoped to one game. Finished in task 1.4."
     },
     "ZoneType": {
       "type": "string",
@@ -1418,15 +1418,19 @@
         },
         "text": {
           "type": "string"
+        },
+        "entryType": {
+          "$ref": "#/$defs/GameLogEntryType"
         }
       },
       "required": [
         "type",
         "seq",
-        "text"
+        "text",
+        "entryType"
       ],
       "additionalProperties": true,
-      "$comment": "E2: type is already const log; GameEventAddLog.type is a GameLogEntryType and cannot share that key. Category field unresolved."
+      "$comment": "Plan 3.5 E2: type is the log discriminator; entryType carries Forge GameLogEntryType. Finished in task 1.8."
     },
     "logTail": {
       "type": "object",
@@ -1436,14 +1440,21 @@
         },
         "seq": {
           "$ref": "#/$defs/Sequence"
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LogEntry"
+          }
         }
       },
       "required": [
         "type",
-        "seq"
+        "seq",
+        "entries"
       ],
       "additionalProperties": true,
-      "$comment": "Plan 3.1 mentions logTail on reconnect/resync but gives no envelope or entries field name. E2 asks whether it is a message or bundled field; this reserves the mentioned type without inventing payload fields."
+      "$comment": "Plan 3.1 and 3.5 E2: separate message with the last 200 filtered log entries on reconnect/resync. Finished in task 1.8."
     },
     "prompt": {
       "type": "object",
@@ -1548,9 +1559,18 @@
           "$ref": "#/$defs/Sequence"
         },
         "level": {
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "info",
+            "warning",
+            "error",
+            "rejected"
+          ]
         },
         "text": {
+          "type": "string"
+        },
+        "title": {
           "type": "string"
         }
       },
@@ -1561,7 +1581,7 @@
         "text"
       ],
       "additionalProperties": true,
-      "$comment": "Plan 7.8 defines level rejected; remaining info/error level spellings unspecified (E3)."
+      "$comment": "Plan 3.5 E3: flashIncorrectAction emits rejected with generic text; ActionRouter rejections carry their own reason. Title is optional. Finished in task 1.8."
     },
     "macroState": {
       "type": "object",
@@ -1698,14 +1718,18 @@
         },
         "seatToken": {
           "type": "string"
+        },
+        "protocolVersion": {
+          "const": 1
         }
       },
       "required": [
         "type",
-        "name"
+        "name",
+        "protocolVersion"
       ],
       "additionalProperties": true,
-      "$comment": "seatToken is used on reconnect; first-join issuance/response and envelope sequencing remain E11/E13."
+      "$comment": "Plan 3.5 E13: join carries the client protocolVersion; clientSeq/baseSeq are required only on game actions. Finished in task 1.4. Seat-token issuance remains E11 (tasks 1.11, 1.12)."
     },
     "submitDeck": {
       "type": "object",
@@ -2346,7 +2370,8 @@
         },
         "count": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "maximum": 99
         }
       },
       "required": [
@@ -2356,7 +2381,7 @@
         "count"
       ],
       "additionalProperties": true,
-      "$comment": "Plan 3.2 repeats the parameterless method, stopping if a prompt opens; maximum count needs E13."
+      "$comment": "Plan 3.2 and 3.5 E13: count is 1..99 parameterless repeat calls, stopping if a prompt opens. Finished in task 1.4."
     },
     "nextGame": {
       "type": "object",
@@ -2385,7 +2410,7 @@
         "decision"
       ],
       "additionalProperties": true,
-      "$comment": "NextGameDecision.java:3 has NEW, CONTINUE, QUIT; rematch mapping remains E4."
+      "$comment": "Plan 3.5 E4 (decided): rematch -> NextGameDecision.NEW (same decks, fresh game); quit -> QUIT; CONTINUE unused because a match is one game. forge-gui/src/main/java/forge/gamemodes/match/NextGameDecision.java:3."
     },
     "describeAbility": {
       "type": "object",
@@ -2410,7 +2435,7 @@
         "cardId"
       ],
       "additionalProperties": true,
-      "$comment": "E1: Forge returns String but no reply message is defined in plan."
+      "$comment": "Plan 3.5 E1: abilityDescription {cardId, text} carries the getActivateDescription result. Finished in task 1.12 area."
     },
     "ServerMessage": {
       "oneOf": [
@@ -2455,6 +2480,12 @@
         },
         {
           "$ref": "#/$defs/pong"
+        },
+        {
+          "$ref": "#/$defs/attention"
+        },
+        {
+          "$ref": "#/$defs/abilityDescription"
         }
       ]
     },
@@ -2548,6 +2579,94 @@
           "$ref": "#/$defs/describeAbility"
         }
       ]
+    },
+    "GameLogEntryType": {
+      "type": "string",
+      "enum": [
+        "GAME_OUTCOME",
+        "MATCH_RESULTS",
+        "TURN",
+        "MULLIGAN",
+        "ANTE",
+        "DRAFT",
+        "ZONE_CHANGE",
+        "PLAYER_CONTROL",
+        "DAMAGE",
+        "LIFE",
+        "LAND",
+        "DISCARD",
+        "COMBAT",
+        "INFORMATION",
+        "STACK_RESOLVE",
+        "STACK_ADD",
+        "EFFECT_REPLACED",
+        "MANA",
+        "PHASE"
+      ],
+      "$comment": "forge-game/src/main/java/forge/game/GameLogEntryType.java:3 — Enum names, not display captions; plan 3.5 E2. Finished in task 1.8."
+    },
+    "LogEntry": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "entryType": {
+          "$ref": "#/$defs/GameLogEntryType"
+        },
+        "seq": {
+          "$ref": "#/$defs/Sequence"
+        }
+      },
+      "required": [
+        "text",
+        "entryType",
+        "seq"
+      ],
+      "additionalProperties": false,
+      "$comment": "Plan 3.1 and 3.5 E2: one filtered historical log entry; seq is the original entry sequence. Finished in task 1.8."
+    },
+    "attention": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "attention"
+        },
+        "seq": {
+          "$ref": "#/$defs/Sequence"
+        }
+      },
+      "required": [
+        "type",
+        "seq"
+      ],
+      "additionalProperties": false,
+      "$comment": "Plan 3.5 E10 (decided): alertUser; client flashes the taskbar when the action is on this seat and its window is not focused."
+    },
+    "abilityDescription": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "abilityDescription"
+        },
+        "seq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "cardId": {
+          "$ref": "#/$defs/CardRef"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "seq",
+        "cardId",
+        "text"
+      ],
+      "additionalProperties": true,
+      "$comment": "Plan 3.5 E1: reply to describeAbility; text is IGameController.getActivateDescription return value (forge-gui/src/main/java/forge/interfaces/IGameController.java:52). Finished in task 1.12 area."
     }
   }
 }
