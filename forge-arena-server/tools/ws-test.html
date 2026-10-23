@@ -11,15 +11,18 @@
 </head>
 <body>
   <h1>Forge Arena WebSocket test</h1>
-  <p>Endpoint: <code>ws://localhost:36800/ws</code></p>
+  <p>Endpoint: <code id="endpoint"></code></p>
   <p id="status" role="status">Connecting…</p>
   <pre id="messages" aria-label="Received messages"></pre>
   <script>
     const status = document.getElementById('status');
     const messages = document.getElementById('messages');
-    const socket = new WebSocket('ws://localhost:36800/ws');
+    const seat = new URLSearchParams(location.search).get('seat') ?? '0';
+    const endpoint = `ws://localhost:36800/ws?seat=${encodeURIComponent(seat)}`;
+    document.getElementById('endpoint').textContent = endpoint;
+    const socket = new WebSocket(endpoint);
     socket.addEventListener('open', () => { status.textContent = 'Connected'; });
-    socket.addEventListener('close', event => { status.textContent = `Disconnected (code ${event.code})`; });
+    socket.addEventListener('close', event => { status.textContent = `Disconnected (code ${event.code}): ${event.reason}`; });
     socket.addEventListener('error', () => { status.textContent = 'Connection error. Check that ArenaServer is running.'; });
     socket.addEventListener('message', event => {
       let text = event.data;

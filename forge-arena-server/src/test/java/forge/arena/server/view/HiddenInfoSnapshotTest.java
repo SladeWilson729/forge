@@ -19,6 +19,7 @@ import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotEquals;
 import static org.testng.Assert.assertNotNull;
+import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertTrue;
 
 @Test(singleThreaded = true)
@@ -58,6 +59,46 @@ public class HiddenInfoSnapshotTest {
         assertEquals(object.size(), 2, "HiddenCard has only id and hidden");
         assertTrue(object.get("hidden").getAsBoolean());
         assertTrue(object.get("id").getAsString().matches("h-[0-9a-f]{12}"));
+    }
+
+    @Test
+    public void staleCardViewsPreserveVisibilityWithoutLiveCards() {
+        final ScenarioGame scenario = new ScenarioGame();
+        final Card hand = scenario.addCardToZone("Aetherling", 0, ZoneType.Hand);
+        final Card battlefield = scenario.addCardToZone("Cryptic Serpent", 0, ZoneType.Battlefield);
+        // Zone.removeAllCards(true) clears the live collection without events/view updates,
+        // reproducing the stale views left behind when a player concedes.
+        scenario.player(0).getZone(ZoneType.Hand).removeAllCards(true);
+        scenario.player(0).getZone(ZoneType.Battlefield).removeAllCards(true);
+        assertTrue(scenario.player(0).getView().getHand().contains(hand.getView()));
+        assertTrue(scenario.player(0).getView().getBattlefield().contains(battlefield.getView()));
+        for (final Card card : List.of(hand, battlefield)) {
+            assertNull(scenario.game.findByView(card.getView()));
+            assertNull(scenario.game.findById(card.getId()));
+        }
+        final JsonObject[] states = scenario.snapshots(); // Validates every seat against the schema.
+        for (int seat = 0; seat < 4; seat++) {
+            final JsonObject publicCard = mappedCard(scenario, states[seat], seat, 0, "battlefield", battlefield);
+            assertEquals(publicCard.get("id").getAsInt(), battlefield.getId());
+            assertEquals(publicCard.get("name").getAsString(), battlefield.getName());
+            assertEquals(publicCard.get("set").getAsString(), battlefield.getPaperCard().getEdition());
+            for (final String liveOnly : List.of("num", "attackTarget", "blockingIds")) {
+                assertFalse(publicCard.has(liveOnly), "Missing live card must omit " + liveOnly);
+            }
+            final JsonObject privateCard = mappedCard(scenario, states[seat], seat, 0, "hand", hand);
+            if (seat == 0) {
+                assertEquals(privateCard.get("id").getAsInt(), hand.getId());
+                assertEquals(privateCard.get("name").getAsString(), hand.getName());
+                assertEquals(privateCard.get("set").getAsString(), hand.getPaperCard().getEdition());
+                for (final String liveOnly : List.of("num", "attackTarget", "blockingIds")) {
+                    assertFalse(privateCard.has(liveOnly));
+                }
+            } else {
+                hidden(privateCard);
+                noIdentity(states[seat], hand);
+                assertFalse(scenario.ids[seat].resolve(hand.getId()).isPresent());
+            }
+        }
     }
 
     @Test

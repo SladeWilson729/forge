@@ -13,6 +13,8 @@ import forge.game.zone.ZoneView;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
+import java.util.List;
+
 import static forge.arena.server.view.HiddenInfoAssertions.noIdentity;
 import static forge.arena.server.view.HiddenInfoAssertions.noRealId;
 import static org.testng.Assert.assertEquals;
@@ -222,12 +224,19 @@ public class PayloadFilterTest {
 
     @Test
     public void leakScannerRejectsNestedReferencesAndArrays() {
-        for (final String leak : new String[] {"{\"id\":12345}", "{\"sourceCardId\":12345}",
+        for (final String leak : new String[] {"{\"id\":12345,\"hidden\":true}", "{\"sourceCardId\":12345}",
+                "{\"id\":12345,\"faceDown\":false}", "{\"commanderId\":12345}",
                 "{\"target\":{\"kind\":\"card\",\"id\":12345}}", "{\"cardIds\":[12345]}",
-                "{\"blockingIds\":[[12345]]}", "{\"nested\":[{\"customid\":\"12345\"}]}"}) {
+                "{\"blockingIds\":[[12345]]}", "{\"nested\":[{\"cardId\":\"12345\"}]}"}) {
             assertThrows(AssertionError.class, () -> noRealId(JsonParser.parseString(leak), 12345));
         }
         noRealId(JsonParser.parseString("{\"amount\":12345,\"id\":\"h-123456789abc\",\"cardIds\":[]}"), 12345);
+        for (final String key : List.of("stackId", "controllerId", "ownerId", "playerId", "activePlayerId",
+                "priorityPlayerId", "monarchId", "initiativeId")) {
+            noRealId(JsonParser.parseString("{\"" + key + "\":12345}"), 12345);
+        }
+        noRealId(JsonParser.parseString("{\"players\":[{\"id\":12345,\"name\":\"Seat 0\"}],"
+                + "\"targets\":[{\"kind\":\"player\",\"id\":12345},{\"kind\":\"stack\",\"id\":12345}]}"), 12345);
     }
 
     private static String generic(final GameLogEntryType type) {

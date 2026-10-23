@@ -1,131 +1,122 @@
 package forge.arena.server;
 
 import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 import org.testng.annotations.Test;
 
-import java.net.URI;
 import java.net.http.HttpClient;
-import java.net.http.WebSocket;
 import java.time.Duration;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
-import static org.testng.Assert.assertEquals;
-import static org.testng.Assert.assertNotNull;
-import static org.testng.Assert.assertTrue;
+import static org.testng.Assert.*;
 
 public class WsServerTest {
-    private static final class Client implements WebSocket.Listener {
-        private final BlockingQueue<String> messages = new LinkedBlockingQueue<>();
-        private final StringBuilder text = new StringBuilder();
-        private final CountDownLatch closed = new CountDownLatch(1);
-        private volatile Throwable error;
-
-        @Override
-        public void onOpen(final WebSocket socket) {
-            socket.request(1);
-        }
-
-        @Override
-        public CompletionStage<?> onText(final WebSocket socket, final CharSequence data, final boolean last) {
-            text.append(data);
-            if (last) {
-                messages.add(text.toString());
-                text.setLength(0);
-            }
-            socket.request(1);
-            return null;
-        }
-
-        @Override
-        public CompletionStage<?> onClose(final WebSocket socket, final int statusCode, final String reason) {
-            closed.countDown();
-            return null;
-        }
-
-        @Override
-        public void onError(final WebSocket socket, final Throwable cause) {
-            error = cause;
-        }
-
-        private String receive() throws InterruptedException {
-            final String message = messages.poll(5, TimeUnit.SECONDS);
-            assertNotNull(message, "Expected WebSocket message; client error: " + error);
-            return message;
-        }
-    }
-
-    private static void assertHello(final String json) {
-        final JsonObject hello = JsonParser.parseString(json).getAsJsonObject();
-        assertEquals(hello.get("type").getAsString(), "hello");
-        assertEquals(hello.get("protocolVersion").getAsInt(), 1);
-        assertEquals(hello.get("serverVersion").getAsString(), "0.8-dev");
-        assertEquals(hello.get("seat").getAsInt(), 0);
+    private static JsonObject state(final String marker) {
+        // Transport fixture only; complete live states are schema-validated in SeatStreamTest.
+        final JsonObject state = new JsonObject();
+        state.addProperty("type", "state");
+        state.addProperty("marker", marker);
+        return state;
     }
 
     @Test(timeOut = 30_000)
-    public void sendsHelloBroadcastAndCachedState() throws Exception {
+    public void sendsHelloSeatStateAndCachedStateOnReplacement() throws Exception {
         final WsServer server = new WsServer("127.0.0.1", 0);
         final ExecutorService executor = Executors.newCachedThreadPool();
-        WebSocket first = null;
-        WebSocket second = null;
-        try {
-            CompletableFuture.runAsync(() -> {
-                try {
-                    server.start();
-                } catch (final InterruptedException ex) {
-                    Thread.currentThread().interrupt();
-                    throw new CompletionException(ex);
-                }
-            }).get(5, TimeUnit.SECONDS);
-            assertTrue(server.getPort() > 0, "Port 0 was assigned a bound port");
-            final URI uri = URI.create("ws://127.0.0.1:" + server.getPort() + "/ws");
+        try (WsTestClient first = new WsTestClient(); WsTestClient second = new WsTestClient();
+             WsTestClient otherSeat = new WsTestClient()) {
+            server.start();
+            assertTrue(server.getPort() > 0);
             final HttpClient http = HttpClient.newBuilder().executor(executor)
                     .connectTimeout(Duration.ofSeconds(5)).build();
-            final Client firstClient = new Client();
-            first = http.newWebSocketBuilder().connectTimeout(Duration.ofSeconds(5))
-                    .buildAsync(uri, firstClient).get(5, TimeUnit.SECONDS);
-            assertHello(firstClient.receive());
-
-            final String state = WsServer.GSON.toJson(Map.of("type", "state", "seq", 1, "seat", 0,
-                    "turn", 1, "hand", List.of(Map.of("name", "Urza's Tower"))));
-            assertTrue(state.contains("Urza's Tower"), "Apostrophes remain readable");
-            server.broadcastState(state);
-            assertEquals(firstClient.receive(), state);
-
-            final Client secondClient = new Client();
-            second = http.newWebSocketBuilder().connectTimeout(Duration.ofSeconds(5))
-                    .buildAsync(uri, secondClient).get(5, TimeUnit.SECONDS);
-            assertHello(secondClient.receive());
-            assertEquals(secondClient.receive(), state, "Late connection receives the cached state after hello");
-
-            first.sendClose(WebSocket.NORMAL_CLOSURE, "done").get(5, TimeUnit.SECONDS);
-            second.sendClose(WebSocket.NORMAL_CLOSURE, "done").get(5, TimeUnit.SECONDS);
-            assertTrue(firstClient.closed.await(5, TimeUnit.SECONDS), "First client closed");
-            assertTrue(secondClient.closed.await(5, TimeUnit.SECONDS), "Second client closed");
+            first.connect(http, server.getPort(), "/ws?seat=0");
+            otherSeat.connect(http, server.getPort(), "/ws?seat=2");
+            first.hello(0);
+            otherSeat.hello(2);
+            final JsonObject zero = state("Urza's Tower");
+            final JsonObject two = state("Seat two only");
+            server.writer(0).send(zero);
+            server.writer(2).send(two);
+            assertTrue(WsServer.GSON.toJson(zero).contains("Urza's Tower"));
+            assertEquals(first.receive(), zero);
+            assertEquals(otherSeat.receive(), two);
+            second.connect(http, server.getPort(), "/ws?seat=0");
+            second.hello(0);
+            assertEquals(second.receive(), zero);
+            assertTrue(first.closed.await(5, TimeUnit.SECONDS));
+            assertEquals(first.closeCode, 1000);
+            assertTrue(first.closeReason.contains("Replaced"));
+            final JsonObject next = state("Updated seat zero");
+            server.writer(0).send(next);
+            assertEquals(second.receive(), next);
+            assertEquals(otherSeat.history().size(), 2, "No seat-zero state reached seat two");
         } finally {
-            if (first != null) {
-                first.abort();
-            }
-            if (second != null) {
-                second.abort();
-            }
+            server.close();
             executor.shutdownNow();
-            try {
-                CompletableFuture.runAsync(server::close).get(5, TimeUnit.SECONDS);
-            } finally {
-                assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS), "Client executor stopped");
+            assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test(timeOut = 30_000)
+    public void rejectsMissingMalformedAndDuplicateSeats() throws Exception {
+        final WsServer server = new WsServer("127.0.0.1", 0);
+        final ExecutorService executor = Executors.newCachedThreadPool();
+        try {
+            server.start();
+            final HttpClient http = HttpClient.newBuilder().executor(executor)
+                    .connectTimeout(Duration.ofSeconds(5)).build();
+            for (final String path : new String[] {"/ws", "/ws?seat=", "/ws?seat=-1", "/ws?seat=4",
+                    "/ws?seat=no", "/ws?seat=0&seat=2", "/ws/extra?seat=0"}) {
+                try (WsTestClient client = new WsTestClient()) {
+                    client.connect(http, server.getPort(), path);
+                    assertTrue(client.closed.await(5, TimeUnit.SECONDS), path);
+                    assertEquals(client.closeCode, 1008);
+                    assertTrue(client.closeReason.contains("seat"));
+                    assertTrue(client.history().isEmpty());
+                }
             }
+        } finally {
+            server.close();
+            executor.shutdownNow();
+            assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test(timeOut = 30_000)
+    public void coalescingPreservesAcceptedMessageOrderAcrossConnection() throws Exception {
+        final WsServer server = new WsServer("127.0.0.1", 0);
+        final ExecutorService executor = Executors.newCachedThreadPool();
+        try (WsTestClient client = new WsTestClient()) {
+            server.start();
+            // Queue non-state messages while offline. Coalescing must not lose or reorder them.
+            for (int i = 0; i < 25; i++) {
+                final JsonObject message = new JsonObject();
+                message.addProperty("type", "message");
+                message.addProperty("level", "info");
+                message.addProperty("text", "Message " + i);
+                server.writer(3).send(message);
+                server.writer(3).send(state("State " + i));
+            }
+            final HttpClient http = HttpClient.newBuilder().executor(executor)
+                    .connectTimeout(Duration.ofSeconds(5)).build();
+            client.connect(http, server.getPort(), "/ws?seat=3");
+            client.hello(3);
+            long previous = 0;
+            for (int i = 0; i < 25; i++) {
+                final JsonObject message = client.receive();
+                assertEquals(message.get("text").getAsString(), "Message " + i);
+                assertTrue(message.get("seq").getAsLong() > previous);
+                previous = message.get("seq").getAsLong();
+            }
+            final JsonObject last = client.receive();
+            assertEquals(last.get("marker").getAsString(), "State 24");
+            assertTrue(last.get("seq").getAsLong() > previous);
+            assertEquals(client.history().size(), 27, "Hello, all messages, and only the latest state");
+        } finally {
+            server.close();
+            executor.shutdownNow();
+            assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
         }
     }
 }

@@ -1,18 +1,16 @@
 package forge.arena.server;
 
 import com.google.common.eventbus.Subscribe;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonObject;
 import forge.deck.Deck;
 import forge.deck.io.DeckSerializer;
 import forge.game.Game;
 import forge.game.GameOutcome;
 import forge.game.GameType;
-import forge.game.card.Card;
 import forge.game.event.GameEventTurnBegan;
 import forge.game.event.GameEventTurnPhase;
 import forge.game.player.RegisteredPlayer;
-import forge.game.zone.ZoneType;
+import forge.game.player.Player;
+import forge.gamemodes.net.ProtocolGuiGame;
 import forge.gamemodes.match.HostedMatch;
 import forge.gui.GuiBase;
 import forge.gui.interfaces.IGuiGame;
@@ -83,12 +81,21 @@ public final class ArenaServerMain {
         System.out.println("[arena] WebSocket listening on ws://" + host + ":" + wsServer.getPort() + "/ws");
 
         try {
+            final List<SeatProtocolGui> seatViews = new ArrayList<>();
             final HostedMatch match = new HostedMatch() {
                 @Override
                 public void registerSpectator(final IGuiGame gui, final PlayerControllerHuman controller) {
                     // This runs before gameplay is scheduled. The start-game hook is too late:
                     // PhaseHandler fires turn 1 before calling that hook.
-                    getGame().subscribeToEvents(new TurnLogger(getGame(), wsServer));
+                    getGame().subscribeToEvents(new TurnLogger());
+                    for (int seat = 0; seat < 4; seat++) {
+                        final Player player = getGame().getPlayers().get(seat);
+                        seatViews.add(SeatProtocolGui.attach(getGame(),
+                                new JsonSeatRemote(getGame(), player.getView(), wsServer.writer(seat))));
+                    }
+                    // Keep HostedMatch's original watcher for playback bookkeeping only. Its
+                    // desktop handler must not walk a protocol view concurrently on the EDT.
+                    ((ProtocolGuiGame) gui).pause();
                     super.registerSpectator(gui, controller);
                 }
             };
@@ -97,7 +104,15 @@ public final class ArenaServerMain {
                 // HostedMatch otherwise automatically continues an all-AI match into another game.
                 match.getGame().getRules().setGamesPerMatch(1);
             });
-            match.setEndGameHook(finished::countDown);
+            match.setEndGameHook(() -> {
+                // HostedMatch flushes only its own registered human controllers. These extra
+                // watchers must flush on this same game thread, including the final outcome.
+                for (final SeatProtocolGui gui : seatViews) {
+                    gui.getForwarder().flush();
+                    gui.updateGameView();
+                }
+                finished.countDown();
+            });
             // The game type alone does not set GameRules.hasCommander().
             match.startMatch(GameType.Commander, EnumSet.of(GameType.Commander), players, Collections.emptyMap());
             final Game game = match.getGame();
@@ -122,38 +137,9 @@ public final class ArenaServerMain {
     }
 
     public static final class TurnLogger {
-        private final Game game;
-        private final WsServer wsServer;
-        private boolean sentOpeningHand;
-
-        public TurnLogger(final Game game, final WsServer wsServer) {
-            this.game = game;
-            this.wsServer = wsServer;
-        }
-
         @Subscribe
         public void onTurn(final GameEventTurnBegan event) {
             System.out.println("[arena] " + event);
-            if (event.turnNumber() == 1 && !sentOpeningHand) {
-                sentOpeningHand = true;
-                // Phase 0 placeholder, not the Section 3.3 snapshot. Read live Cards here
-                // on the game thread; only the finished JSON string goes to Netty.
-                // Dev-only: everyone connecting receives seat 0's hand. Per-seat filtering
-                // arrives in task 1.3.
-                final JsonObject state = new JsonObject();
-                state.addProperty("type", "state");
-                state.addProperty("seq", 1);
-                state.addProperty("seat", 0);
-                state.addProperty("turn", 1);
-                final JsonArray hand = new JsonArray();
-                for (final Card card : game.getPlayers().get(0).getCardsIn(ZoneType.Hand)) {
-                    final JsonObject entry = new JsonObject();
-                    entry.addProperty("name", card.getName());
-                    hand.add(entry);
-                }
-                state.add("hand", hand);
-                wsServer.broadcastState(WsServer.GSON.toJson(state));
-            }
         }
 
         @Subscribe

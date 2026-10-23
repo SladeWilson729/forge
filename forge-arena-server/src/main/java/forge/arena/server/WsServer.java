@@ -5,6 +5,7 @@ import com.google.gson.GsonBuilder;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.SimpleChannelInboundHandler;
@@ -15,33 +16,36 @@ import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpServerCodec;
+import io.netty.handler.codec.http.QueryStringDecoder;
+import io.netty.handler.codec.http.websocketx.CloseWebSocketFrame;
+import io.netty.handler.codec.http.websocketx.WebSocketServerProtocolConfig;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketServerProtocolHandler;
-import io.netty.util.AttributeKey;
 import io.netty.util.concurrent.EventExecutor;
 import io.netty.util.concurrent.Future;
 import io.netty.util.concurrent.GlobalEventExecutor;
 
 import java.net.InetSocketAddress;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.List;
 
-/** Minimal Phase 0 WebSocket transport. Only immutable JSON strings cross threads. */
+/** Dev per-seat WebSocket transport; seat tokens arrive in tasks 1.11/1.12. */
 public final class WsServer implements AutoCloseable {
-    static final Gson GSON = new GsonBuilder().disableHtmlEscaping().create();
-    private static final String HELLO = GSON.toJson(new Hello("hello", 1, "0.8-dev", 0));
-    private static final AttributeKey<Boolean> HANDSHAKEN = AttributeKey.valueOf(WsServer.class, "handshaken");
+    static final Gson GSON = new GsonBuilder().disableHtmlEscaping().serializeNulls().create();
 
     private final String host;
     private final int port;
     private final EventLoopGroup bossGroup = new NioEventLoopGroup(1);
     private final EventLoopGroup workerGroup = new NioEventLoopGroup();
     private final ChannelGroup channels = new DefaultChannelGroup(GlobalEventExecutor.INSTANCE);
-    private final AtomicReference<String> state = new AtomicReference<>();
+    private final SeatWriter[] writers = new SeatWriter[4];
     private Channel serverChannel;
 
     public WsServer(final String host, final int port) {
         this.host = host;
         this.port = port;
+        for (int seat = 0; seat < writers.length; seat++) {
+            writers[seat] = new SeatWriter(seat);
+        }
     }
 
     /** Bind on the lifecycle owner thread, never on a Netty I/O thread. */
@@ -58,7 +62,9 @@ public final class WsServer implements AutoCloseable {
                     protected void initChannel(final SocketChannel channel) {
                         channels.add(channel);
                         channel.pipeline().addLast(new HttpServerCodec(), new HttpObjectAggregator(65536),
-                                new WebSocketServerProtocolHandler("/ws"), new MessageHandler());
+                                // Netty 4.1.115 checkStartsWith accepts '?' after /ws.
+                                new WebSocketServerProtocolHandler(WebSocketServerProtocolConfig.newBuilder()
+                                        .websocketPath("/ws").checkStartsWith(true).build()), new MessageHandler());
                     }
                 });
         serverChannel = bootstrap.bind(host, port).sync().channel();
@@ -72,17 +78,20 @@ public final class WsServer implements AutoCloseable {
         return ((InetSocketAddress) serverChannel.localAddress()).getPort();
     }
 
-    /** Safe on any thread: cache the snapshot and enqueue writes without waiting for sockets. */
-    public void broadcastState(final String json) {
-        state.set(json);
-        channels.writeAndFlush(new TextWebSocketFrame(json),
-                channel -> Boolean.TRUE.equals(channel.attr(HANDSHAKEN).get()));
+    public SeatWriter writer(final int seat) {
+        if (seat < 0 || seat >= writers.length) {
+            throw new IllegalArgumentException("Seat must be 0..3");
+        }
+        return writers[seat];
     }
 
     /** Stop and await both groups on the lifecycle owner thread. */
     @Override
     public void close() {
         checkLifecycleThread();
+        for (final SeatWriter writer : writers) {
+            writer.close();
+        }
         channels.close().syncUninterruptibly();
         final Future<?> bossStopped = bossGroup.shutdownGracefully();
         final Future<?> workerStopped = workerGroup.shutdownGracefully();
@@ -106,14 +115,20 @@ public final class WsServer implements AutoCloseable {
     private final class MessageHandler extends SimpleChannelInboundHandler<TextWebSocketFrame> {
         @Override
         public void userEventTriggered(final ChannelHandlerContext ctx, final Object event) throws Exception {
-            if (event instanceof WebSocketServerProtocolHandler.HandshakeComplete) {
-                ctx.writeAndFlush(new TextWebSocketFrame(HELLO));
-                // Publish eligibility only after hello is queued. Register before reading the
-                // cache so a broadcast racing the handshake cannot be missed.
-                ctx.channel().attr(HANDSHAKEN).set(true);
-                final String cached = state.get();
-                if (cached != null) {
-                    ctx.writeAndFlush(new TextWebSocketFrame(cached));
+            if (event instanceof WebSocketServerProtocolHandler.HandshakeComplete handshake) {
+                try {
+                    final QueryStringDecoder query = new QueryStringDecoder(handshake.requestUri());
+                    final List<String> seats = query.parameters().get("seat");
+                    if (!"/ws".equals(query.path()) || seats == null || seats.size() != 1
+                            || !seats.get(0).matches("[0-3]")) {
+                        throw new IllegalArgumentException("Connect to /ws?seat=N with exactly one seat from 0..3");
+                    }
+                    // No bridge lock or wait on I/O: the seat writer serializes hello, cached
+                    // state, replacement and live sends, so handshake races cannot reorder them.
+                    writer(Integer.parseInt(seats.get(0))).connect(ctx.channel());
+                } catch (final IllegalArgumentException ex) {
+                    ctx.writeAndFlush(new CloseWebSocketFrame(1008, "Invalid seat: use /ws?seat=N, N=0..3"))
+                            .addListener(ChannelFutureListener.CLOSE);
                 }
             }
             super.userEventTriggered(ctx, event);
@@ -131,5 +146,4 @@ public final class WsServer implements AutoCloseable {
         }
     }
 
-    private record Hello(String type, int protocolVersion, String serverVersion, int seat) { }
 }

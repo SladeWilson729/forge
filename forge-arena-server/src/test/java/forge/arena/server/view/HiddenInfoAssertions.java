@@ -24,20 +24,34 @@ final class HiddenInfoAssertions {
     }
 
     static void noRealId(final JsonElement payload, final int realId) {
-        scanIds(payload, realId, false);
+        scanIds(payload, realId, false, "$", payload);
     }
 
-    private static void scanIds(final JsonElement value, final int realId, final boolean reference) {
+    private static void scanIds(final JsonElement value, final int realId, final boolean reference,
+                                final String path, final JsonElement payload) {
         if (value.isJsonObject()) {
-            value.getAsJsonObject().entrySet().forEach(entry -> {
+            final JsonObject object = value.getAsJsonObject();
+            // Player and stack ids have separate namespaces and may equal a hidden card id.
+            // All three card variants have hidden or faceDown; EntityRef tags its namespace.
+            final boolean cardObject = object.has("kind")
+                    ? "card".equals(object.get("kind").getAsString())
+                    : object.has("hidden") || object.has("faceDown");
+            object.entrySet().forEach(entry -> {
                 final String key = entry.getKey();
-                scanIds(entry.getValue(), realId, reference || key.endsWith("id") || key.endsWith("Id")
-                        || (key.endsWith("Ids") && entry.getValue().isJsonArray()));
+                final boolean cardReference = switch (key) {
+                    case "id" -> cardObject;
+                    case "cardId", "sourceCardId", "commanderId", "cardIds", "blockingIds" -> true;
+                    default -> false;
+                };
+                scanIds(entry.getValue(), realId, cardReference, path + "." + key, payload);
             });
         } else if (value.isJsonArray()) {
-            value.getAsJsonArray().forEach(item -> scanIds(item, realId, reference));
+            for (int index = 0; index < value.getAsJsonArray().size(); index++) {
+                scanIds(value.getAsJsonArray().get(index), realId, reference, path + "[" + index + "]", payload);
+            }
         } else if (reference && value.isJsonPrimitive()) {
-            assertFalse(value.getAsString().equals(Integer.toString(realId)), "Hidden real id leaked: " + realId);
+            assertFalse(value.getAsString().equals(Integer.toString(realId)),
+                    "Hidden real id leaked: " + realId + " at " + path + " in " + payload);
         }
     }
 }

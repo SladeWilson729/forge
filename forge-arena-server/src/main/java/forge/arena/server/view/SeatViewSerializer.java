@@ -30,9 +30,12 @@ import java.util.Objects;
 /**
  * Builds detached JSON only on the game thread, or on the UI thread while the game thread
  * is parked (plan 2.2 rule 1). The caller supplies that guarantee; thread names cannot prove it.
- * Not yet connected to JsonSeatRemote (task 1.4). Never call from a socket/writer thread.
+ * JsonSeatRemote invokes this inline on its Forge-safe caller, never a socket/writer thread.
  */
 public final class SeatViewSerializer {
+    private static final System.Logger LOG = System.getLogger(SeatViewSerializer.class.getName());
+    private boolean missingLiveCardLogged;
+
     public JsonObject buildState(final Game game, final PlayerView seat, final IdMapper ids, final long seq) {
         Objects.requireNonNull(game);
         Objects.requireNonNull(ids);
@@ -54,7 +57,7 @@ public final class SeatViewSerializer {
                             boolean faceDown, JsonElement ref) { }
 
     /** All Forge references and per-card visibility decisions live only for this one walk. */
-    private static final class Snapshot {
+    private final class Snapshot {
         private final Game game;
         private final PlayerView seat;
         private final IdMapper ids;
@@ -177,7 +180,15 @@ public final class SeatViewSerializer {
                 return result;
             }
             final CardView view = info.card();
-            final Card live = Objects.requireNonNull(game.findByView(view), "Visible card has no live counterpart");
+            Card live = game.findByView(view);
+            if (live == null) {
+                live = game.findById(view.getId());
+            }
+            if (live == null && !missingLiveCardLogged) {
+                missingLiveCardLogged = true;
+                LOG.log(System.Logger.Level.DEBUG,
+                        "Card {0} has no live counterpart; using view fields (logged once per serializer)", view.getId());
+            }
             final CardView.CardStateView current = view.getCurrentState();
             if (info.identityVisible()) {
                 // CurrentState is the anonymous face-down face. Only an authorized seat gets
@@ -187,7 +198,7 @@ public final class SeatViewSerializer {
                         : current;
                 result.addProperty("name", identity.getName());
                 result.addProperty("set", identity.getSetCode());
-                final IPaperCard paper = live.getPaperCard();
+                final IPaperCard paper = live == null ? null : live.getPaperCard();
                 if (paper != null) {
                     result.addProperty("num", paper.getCollectorNumber());
                 }
@@ -208,16 +219,20 @@ public final class SeatViewSerializer {
             result.add("attachedTo", entityRef(view.getEntityAttachedTo()));
             result.addProperty("attacking", view.isAttacking());
             result.addProperty("blocking", view.isBlocking());
-            final Combat combat = game.getCombat();
-            final GameEntity defender = combat == null ? null : combat.getDefenderByAttacker(live);
-            result.add("attackTarget", entityRef(defender == null ? null : defender.getView()));
-            final JsonArray blockers = new JsonArray();
-            if (combat != null) {
-                for (final Card attacker : combat.getAttackersBlockedBy(live)) {
-                    blockers.add(cardInfo(attacker.getView()).ref());
+            // A conceding player's views can outlive their live cards. Visibility still
+            // comes exclusively from CardVisibility; only live-only optional fields vanish.
+            if (live != null) {
+                final Combat combat = game.getCombat();
+                final GameEntity defender = combat == null ? null : combat.getDefenderByAttacker(live);
+                result.add("attackTarget", entityRef(defender == null ? null : defender.getView()));
+                final JsonArray blockers = new JsonArray();
+                if (combat != null) {
+                    for (final Card attacker : combat.getAttackersBlockedBy(live)) {
+                        blockers.add(cardInfo(attacker.getView()).ref());
+                    }
                 }
+                result.add("blockingIds", blockers);
             }
-            result.add("blockingIds", blockers);
             result.addProperty("faceDown", info.faceDown());
             result.add("controllerId", playerRef(view.getController()));
             result.add("ownerId", playerRef(view.getOwner()));

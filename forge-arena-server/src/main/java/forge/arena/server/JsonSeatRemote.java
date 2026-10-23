@@ -1,0 +1,93 @@
+package forge.arena.server;
+
+import com.google.gson.JsonObject;
+import forge.arena.server.view.IdMapper;
+import forge.arena.server.view.SeatViewSerializer;
+import forge.game.Game;
+import forge.game.player.PlayerView;
+import forge.gamemodes.net.DeltaPacket;
+import forge.gamemodes.net.IRemote;
+import forge.gamemodes.net.event.GuiGameEvent;
+import forge.gamemodes.net.event.IdentifiableNetEvent;
+import forge.gamemodes.net.event.NetEvent;
+
+/** Synchronous Forge-to-JSON boundary. Only SeatWriter does socket work. */
+public final class JsonSeatRemote implements IRemote {
+    private static final System.Logger LOG = System.getLogger(JsonSeatRemote.class.getName());
+    private final Game game;
+    private final PlayerView seat;
+    private final IdMapper ids = new IdMapper();
+    private final SeatViewSerializer serializer = new SeatViewSerializer();
+    private final SeatWriter writer;
+    private volatile boolean dirty;
+    private volatile long lastStateSequence;
+
+    public JsonSeatRemote(final Game game, final PlayerView seat, final SeatWriter writer) {
+        this.game = game;
+        this.seat = seat;
+        this.writer = writer;
+    }
+
+    @Override
+    public void send(final NetEvent event) {
+        if (!(event instanceof GuiGameEvent gui)) {
+            LOG.log(System.Logger.Level.DEBUG, "Ignoring non-GUI event");
+            return;
+        }
+        final Object[] args = gui.getObjects();
+        switch (gui.getMethod()) {
+            case setGameView -> snapshot();
+            case applyDelta -> {
+                final DeltaPacket delta = (DeltaPacket) args[0];
+                // Events-only packets may originate on a timer/I/O thread. Even a dirty seat
+                // must wait for the next object-bearing delta before walking live Forge state.
+                if (!delta.getObjectDeltas().isEmpty() || !delta.getNewObjects().isEmpty()) {
+                    snapshot();
+                }
+            }
+            case message, showErrorDialog -> {
+                final JsonObject message = new JsonObject();
+                message.addProperty("type", "message");
+                message.addProperty("level", gui.getMethod() == forge.gamemodes.net.ProtocolMethod.message ? "info" : "error");
+                message.addProperty("text", (String) args[0]);
+                if (args.length > 1 && args[1] != null) {
+                    message.addProperty("title", (String) args[1]);
+                }
+                writer.send(message);
+            }
+            case alertUser -> {
+                final JsonObject message = new JsonObject();
+                message.addProperty("type", "attention");
+                writer.send(message);
+            }
+            default -> LOG.log(System.Logger.Level.DEBUG, "Seat {0}: {1}", seat.getId(), gui.getMethod());
+        }
+    }
+
+    private void snapshot() {
+        try {
+            // Inline, on Forge's safe caller (plan 2.2 rule 1). Serializer owns the shared
+            // CardVisibility/IdMapper policy; never reconstruct visibility in the transport.
+            lastStateSequence = writer.send(serializer.buildState(game, seat, ids, 0));
+            dirty = false;
+        } catch (final RuntimeException | Error ex) {
+            dirty = true;
+            LOG.log(System.Logger.Level.ERROR, "Seat " + seat.getId() + " snapshot failed; retrying on next object delta", ex);
+        }
+    }
+
+    public boolean isDirty() {
+        return dirty;
+    }
+
+    public long getLastStateSequence() {
+        return lastStateSequence;
+    }
+
+    @Override
+    public Object sendAndWait(final IdentifiableNetEvent event) {
+        LOG.log(System.Logger.Level.ERROR, "Unexpected blocking seat-view call: {0}",
+                event instanceof GuiGameEvent gui ? gui.getMethod() : event.getClass().getSimpleName());
+        return null; // Prompt codec arrives in task 1.6; these watchers never control an AI.
+    }
+}
