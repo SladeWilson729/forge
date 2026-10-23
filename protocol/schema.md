@@ -1,6 +1,6 @@
 # Forge Arena protocol catalog and schema
 
-Generated against Forge 2.0.16-SNAPSHOT at commit f483a4a6b4
+Generated against Forge 2.0.16-SNAPSHOT at commit f3ca67d17d
 
 This is the v1 draft from project plan v10, sections 2.1, 2.2, 2.5, 2.6, 3 (including decisions in 3.5) and 7.8. It documents a future bridge; it does not describe the Phase 0 opening-hand WebSocket payload. Section E records the plan 3.5 decisions and defaults, with the tasks that finish each default. The schema types source-supported values and leaves explicitly unresolved payloads open; passing schema validation alone is not authorization or a guarantee of per-seat visibility.
 
@@ -43,7 +43,7 @@ Sources are repository-relative to this commit. The enum signatures below preser
 | `chooseEntitiesForEffect` | SERVER | List | String, List, int, int, DelayedReveal | syncAndSendAndWait | yes | prompt.kind=chooseEntities, title=title, options=optionList, min=min, max=max; list result and delayedReveal E5 |
 | `manipulateCardList` | SERVER | List | String, Iterable, Iterable, boolean, boolean, boolean | syncAndSendAndWait | yes | prompt.kind=manipulateList, title=title, options=cards; manipulable/destination flags and ordered result E5 |
 | `setCard` | SERVER | void | CardView | syncAndSend | no | ignored: preview card has no named field/message; decided local/ignored in plan 3.5 E10 |
-| `setSelection` | SERVER | void | Selection | syncAndSend | no | state.activeInput.chosen/min/max/targets/selectable (last two encodings E7/E8) |
+| `setSelection` | SERVER | void | Selection | syncAndSend | no | state.activeInput.chosen/min/max/targets/selectable (Input fields finished in E7; mixed references use EntityRef) |
 | `showRevealedCards` | SERVER | void | Iterable | syncAndSend | no | event.kind=reveal, cardIds=filtered cards; temporary visibility from preceding sync |
 | `hideRevealedCards` | SERVER | void | none | send | no | ignored: plan has reveal but no clear-reveal message; decided local/ignored in plan 3.5 E10 |
 | `setWeaklySelectable` | SERVER | void | Iterable | send (after updateGameView) | no | state.activeInput.highlighted[].id/strength (duplicates retain strength) |
@@ -195,7 +195,7 @@ Every message is an object discriminated by `type`. Root schema accepts either u
 
 All server messages require `seq: integer >= 0`, increasing per seat. Client game actions require `clientSeq` and `baseSeq` of that type; `baseSeq` is the state the player saw. Prompt replies require `requestId` and `result`. Only game actions require clientSeq/baseSeq (plan 3.5 E13); the existing lobby/heartbeat/promptReply behavior is retained: these fields are allowed but not required. Message-specific fields marked `?` are not universally required; this is a draft, not a decision that Forge-required prompt context can be omitted. Extra envelope fields are allowed while the plan gaps are open. Shared definitions with no declared type explicitly mark a representation the plan and sources do not yet determine.
 
-`CardRef` is integer (visible) or opaque string (hidden); `PlayerRef`, abilityId and stackId are Java-int identities, not array positions. All ids in every direction pass through per-seat IdMapper; clients cannot act on hidden ids except when explicitly offered by their current prompt. `requestId` uses the existing IdentifiableNetEvent/IIdentifiable integer correlation type; plan 3.5 E13 scopes 32-bit integer ids to one game, with implementation finished in task 1.4. The existing opaque CardRef string alternative is retained; E8 shapes are finished in task 1.2.
+`CardRef` is integer (visible) or opaque string (hidden); `PlayerRef`, abilityId and stackId are Java-int identities, not array positions. All ids in every direction pass through per-seat IdMapper; clients cannot act on hidden ids except when explicitly offered by their current prompt. `requestId` uses the existing IdentifiableNetEvent/IIdentifiable integer correlation type; plan 3.5 E13 scopes 32-bit integer ids to one game, with implementation finished in task 1.4. The opaque CardRef string alternative is retained. E8 is decided in task 1.2: `EntityRef` is `{kind, id}`, with kind `player` and a PlayerRef, `card` and a CardRef, or `stack` and an Int32 stack id. Planeswalkers and battles use kind `card`.
 
 ### Server to client
 
@@ -242,11 +242,11 @@ All server messages require `seq: integer >= 0`, increasing per seat. Client gam
 | `resync` | none | Cached state/prompt resend, ProtocolGuiGame.setResyncPending; not requestResync |
 | `ping` | none | WsServer heartbeat; no Forge method |
 | `useMana` | `color`: integer | IGameController.useMana |
-| `declareAttacker` | `attackerId`: `CardRef`; `defenderId`: `CardRef` or `PlayerRef` | Select defender, then selectCard(attacker); idempotence/composite rules below |
+| `declareAttacker` | `attackerId`: `CardRef`; `defenderId`: `EntityRef` | Select defender, then selectCard(attacker); idempotence/composite rules below |
 | `undeclareAttacker` | `attackerId`: `CardRef` | selectCard(attacker, trigger button 3) |
 | `declareBlocker` | `blockerId`: `CardRef`; `attackerId`: `CardRef` | Select attacker then selectCard(blocker); move-safe composite rules below |
 | `undeclareBlocker` | `blockerId`: `CardRef` | selectCard(blocker, trigger button 3) |
-| `attackAll` | `defenderId`: `CardRef` or `PlayerRef` | Select defender then IGameController.alphaStrike |
+| `attackAll` | `defenderId`: `EntityRef` | Select defender then IGameController.alphaStrike |
 | `reorderHand` | `cardId`: `CardRef`; `index`: `Int32` | IGameController.reorderHand |
 | `promptReply` | `requestId`: `RequestId`; `result`: `PromptResult` | Completes JsonSeatRemote pending future directly; Forge receives converted return value |
 | `setYield` | `kind`: enum `"setMarker"`, `"clearMarker"`, `"stackYield"`, `"untilEndOfTurn"`, `"cardAutoYield"`, `"triggerDecision"`, `"disableYields"`, `"disableTriggers"`, `"skipPhase"`, `"pref"`, `"seed"`, `"clearAbilityOrders"` | IGameController.sendYieldUpdate -> applyYieldUpdate |
@@ -254,7 +254,7 @@ All server messages require `seq: integer >= 0`, increasing per seat. Client gam
 | `nextGame` | `decision`: enum `"rematch"`, `"quit"` | IGameController.nextGameDecision: rematch -> NEW (same decks, fresh game), quit -> QUIT; CONTINUE unused (one game per match) |
 | `describeAbility` | `cardId`: `CardRef` | IGameController.getActivateDescription -> abilityDescription {cardId, text}; finished in task 1.12 area |
 
-Section 2.5 is more precise than the compressed 3.2 table: undeclareAttacker needs only attackerId, and undeclareBlocker only blockerId. A defender can be a player, planeswalker or battle; raw integer namespaces need E8 resolved. For declareAttacker, do nothing if already attacking that defender, otherwise remove an old assignment, select defender then attacker. For declareBlocker, do nothing if the assignment exists; remove an incompatible old assignment, select the attacker unless already chosen, then select blocker. Each composite runs in one EDT task. `cancel` uses Forge button semantics: during attacks it can alpha-strike or recall attackers, so labels must come from updateButtons.
+Section 2.5 is more precise than the compressed 3.2 table: undeclareAttacker needs only attackerId, and undeclareBlocker only blockerId. A defender can be a player, planeswalker or battle; tagged EntityRef separates their identity namespaces. Combat validation must reject stack references and any other illegal defender. For declareAttacker, do nothing if already attacking that defender, otherwise remove an old assignment, select defender then attacker. For declareBlocker, do nothing if the assignment exists; remove an incompatible old assignment, select the attacker unless already chosen, then select blocker. Each composite runs in one EDT task. `cancel` uses Forge button semantics: during attacks it can alpha-strike or recall attackers, so labels must come from updateButtons.
 
 ### Blocking prompts and results
 
@@ -302,7 +302,7 @@ YieldSeed copies the public YieldStateSnapshot record: `cardYields`, `abilityYie
 
 ### State snapshot
 
-The state envelope flattens StateSnapshot alongside type/seq, matching section 3.3 (no extra snapshot wrapper). Its exact plan example is:
+The state envelope flattens StateSnapshot alongside type/seq, matching section 3.3 (no extra snapshot wrapper). The section 3.3 example, updated with the task 1.2 E8 reference and commander shapes, is:
 
 ```json
 {
@@ -311,7 +311,8 @@ The state envelope flattens StateSnapshot alongside type/seq, matching section 3
   "phase": "COMBAT_DECLARE_ATTACKERS", "monarchId": 3, "initiativeId": null,
   "players": [
     { "id": 0, "name": "Will", "life": 31, "poison": 0,
-      "commanderDamage": { "1": 6, "2": 0, "3": 0 },
+      "commanderDamage": [ { "commanderId": 101, "damage": 6 }, { "commanderId": 102, "damage": 0 }, { "commanderId": 103, "damage": 0 } ],
+      "commanders": [ { "cardId": 100, "casts": 1, "tax": 2 } ],
       "manaPool": { "W": 0, "U": 1, "B": 0, "R": 0, "G": 2, "C": 0 },
       "zones": {
         "hand": [ { "id": 88, "name": "Swords to Plowshares", "set": "sta", "num": "10" } ],
@@ -321,15 +322,15 @@ The state envelope flattens StateSnapshot alongside type/seq, matching section 3
       },
       "eliminated": false }
   ],
-  "stack": [ { "stackId": 5, "sourceCardId": 140, "controllerId": 1, "text": "...", "targets": [88] } ],
+  "stack": [ { "stackId": 5, "sourceCardId": 140, "controllerId": 1, "text": "...", "targets": [ { "kind": "card", "id": 88 } ] } ],
   "activeInput": {
     "kind": "declareAttackers",
     "prompt": "Declare attackers",
     "okLabel": "Confirm", "cancelLabel": "Alpha strike",
     "buttons": { "ok": { "enabled": true }, "cancel": { "enabled": true } },
     "highlighted": [ { "id": 301, "strength": 1 }, { "id": 302, "strength": 1 } ],
-    "chosen": [ { "playerId": 1 } ],
-    "attackTargets": [ { "playerId": 1 }, { "playerId": 2 }, { "planeswalkerId": 410 } ]
+    "chosen": [ { "kind": "player", "id": 1 } ],
+    "attackTargets": [ { "kind": "player", "id": 1 }, { "kind": "player", "id": 2 }, { "kind": "card", "id": 410 } ]
   }
 }
 ```
@@ -337,21 +338,24 @@ The state envelope flattens StateSnapshot alongside type/seq, matching section 3
 | Shared shape | Fields and JSON types |
 |---|---|
 | StateSnapshot | `turn`: `Int32`; `activePlayerId`: `PlayerRef` or null; `priorityPlayerId`: `PlayerRef` or null; `phase`: `PhaseType` or null; `monarchId`: `PlayerRef` or null; `initiativeId`: `PlayerRef` or null; `players`: array of `Player`; `stack`: array of `StackItem`; `activeInput`: `ActiveInput` |
-| Player | `id`: `PlayerRef`; `name`: string; `life`: `Int32`; `poison`: `Int32`; `commanderDamage`: object; `manaPool`: `ManaPool`; `zones`: `Zones`; `eliminated`: boolean |
+| Player | `id`: `PlayerRef`; `name`: string; `life`: `Int32`; `poison`: `Int32`; `commanderDamage`: array of `CommanderDamage`; `manaPool`: `ManaPool`; `zones`: `Zones`; `eliminated`: boolean; `commanders`: array of `Commander` |
+| EntityRef | tagged object: `kind`: const `"player"` with `id`: `PlayerRef`, const `"card"` with `id`: `CardRef`, or const `"stack"` with `id`: `Int32`; both fields required |
+| CommanderDamage | `commanderId`: `CardRef`; `damage`: `Int32`; both required |
+| Commander | `cardId`: `CardRef`; `casts`: `Int32`; `tax`: `Int32`; all required |
 | ManaPool | `W`: `Int32`; `U`: `Int32`; `B`: `Int32`; `R`: `Int32`; `G`: `Int32`; `C`: `Int32` |
 | Zones | `hand`: array of `Card`; `library`: object; `graveyard`: array of `Card`; `exile`: array of `Card`; `command`: array of `Card`; `battlefield`: array of `Card` |
-| VisibleCard | `id`: `CardRef`; `name?`: string; `set?`: string; `num?`: string; `tapped?`: boolean; `sick?`: boolean; `power?`: `Int32`; `toughness?`: `Int32`; `damage?`: `Int32`; `counters?`: `Counters`; `attachedTo?`: `EntityRef` or null; `attacking?`: boolean; `blocking?`: boolean; `attackTarget?`: `EntityRef` or null; `faceDown?`: boolean; `controllerId?`: `PlayerRef`; `ownerId?`: `PlayerRef`; `token?`: boolean; `isCommander?`: boolean; `hidden?`: const `false` |
+| VisibleCard | `id`: `CardRef`; `name?`: string; `set?`: string; `num?`: string; `tapped?`: boolean; `sick?`: boolean; `power?`: `Int32`; `toughness?`: `Int32`; `damage?`: `Int32`; `counters?`: `Counters`; `attachedTo?`: `EntityRef` or null; `attacking?`: boolean; `blocking?`: boolean; `attackTarget?`: `EntityRef` or null; `faceDown?`: boolean; `controllerId?`: `PlayerRef`; `ownerId?`: `PlayerRef`; `token?`: boolean; `isCommander?`: boolean; `hidden?`: const `false`; `blockingIds?`: array of `CardRef` |
 | HiddenCard | `id`: string; `hidden`: const `true` |
-| FaceDownCard | `id`: `CardRef`; `tapped?`: boolean; `sick?`: boolean; `power?`: `Int32`; `toughness?`: `Int32`; `damage?`: `Int32`; `counters?`: `Counters`; `attachedTo?`: `EntityRef` or null; `attacking?`: boolean; `blocking?`: boolean; `attackTarget?`: `EntityRef` or null; `faceDown`: const `true`; `controllerId?`: `PlayerRef`; `ownerId?`: `PlayerRef`; `token?`: boolean; `isCommander?`: boolean |
-| StackItem | `stackId`: `Int32`; `sourceCardId`: `CardRef`; `controllerId`: `PlayerRef`; `text`: string; `targets`: array of `CardRef` or `PlayerRef` |
+| FaceDownCard | `id`: `CardRef`; `tapped?`: boolean; `sick?`: boolean; `power?`: `Int32`; `toughness?`: `Int32`; `damage?`: `Int32`; `counters?`: `Counters`; `attachedTo?`: `EntityRef` or null; `attacking?`: boolean; `blocking?`: boolean; `attackTarget?`: `EntityRef` or null; `faceDown`: const `true`; `controllerId?`: `PlayerRef`; `ownerId?`: `PlayerRef`; `token?`: boolean; `isCommander?`: boolean; `blockingIds?`: array of `CardRef` |
+| StackItem | `stackId`: `Int32`; `sourceCardId`: `CardRef`; `controllerId`: `PlayerRef`; `text`: string; `targets`: array of `EntityRef` |
 | ActiveInput | `kind`: string; `prompt?`: string; `okLabel?`: string; `cancelLabel?`: string; `buttons?`: object; `highlighted?`: array of object; `chosen?`: array of `EntityRef`; `attackTargets?`: array of `EntityRef`; `min?`: `Int32`; `max?`: `Int32`; `selectable?`: array of `CardRef`; `targets?`: array of `EntityRef` |
 | SeatClock | `remainingMs`: integer; `running`: boolean |
 
-ActiveInput.buttons is `{ok:{enabled:boolean},cancel:{enabled:boolean}}`; highlighted is `[{id:CardRef,strength:1 or 2}]`. Chosen and attackTargets use typed EntityRef objects. The documented playerId and planeswalkerId forms are retained; cardId represents a general card. Target-stack/battle tags and selectable spelling remain E7/E8. Waiting carries only kind; other kinds derive their available fields from Selection, updateButtons, showPromptMessage and highlight calls.
+ActiveInput.buttons is `{ok:{enabled:boolean},cancel:{enabled:boolean}}`; highlighted is `[{id:CardRef,strength:1 or 2}]`. Chosen, attackTargets and targets use tagged EntityRef objects, as do stack.targets, defenderId, attachedTo and attackTarget. These replace the original playerId/planeswalkerId forms. Input kind fields and selectable spelling remain E7. Waiting carries only kind; other kinds derive their available fields from Selection, updateButtons, showPromptMessage and highlight calls.
 
-ZoneType contains all Forge enum spellings (Hand through None), while the snapshot zone **property names** are lowercase hand/library/graveyard/exile/command/battlefield. Library is `{count:integer}`; the other snapshot zones are arrays of Card. Counter maps have string keys and integer counts. Card fields are optional unless id/hidden/faceDown identifies the variant, because the plan does not settle the complete required set for each zone. All visibility checks must run server-side: canBeShownTo alone does not hide face-down identity; also use canFaceDownBeShownTo. Hidden cards contain only opaque id and hidden=true. Unknown face-down cards omit name/set/num but keep allowed public characteristics. IdMapper reissues hidden ids on hidden-zone re-entry and face-down transitions; do not expose Forge object graphs or hidden-id fields.
+ZoneType contains all Forge enum spellings (Hand through None), while the snapshot zone **property names** are lowercase hand/library/graveyard/exile/command/battlefield. Library is `{count:integer}`; the other snapshot zones are arrays of Card. Counter maps have CounterType.toString() keys and integer counts (not localized display names); a null Forge counter multiset becomes an empty object. Card fields are optional unless id/hidden/faceDown identifies the variant, because the plan does not settle the complete required set for each zone. All visibility checks must run server-side: canBeShownTo alone does not hide face-down identity; also use canFaceDownBeShownTo. Hidden cards contain only opaque id and hidden=true. Unknown face-down cards omit name/set/num but keep allowed public characteristics. IdMapper reissues hidden ids on hidden-zone re-entry and face-down transitions; do not expose Forge object graphs or hidden-id fields.
 
-State getters already visible in the sources include GameView.getTurn/getPhase/getPlayerTurn/getStack/getCombat; PlayerView.getHasPriority/getLife/getCommanderDamage/getCommanderCast/getMana/getHasLost/getCards; CardView flags and CardStateView.getName/getSetCode/getPower/getToughness. Commander damage is queried by commander card, not opposing player. Collector-number and designation lookup, commander-tax representation and final combat topology remain task 1.2/E8.
+The complete getter inventory, return types, source lines and visibility rules are in [state-fields.md](state-fields.md). Player.commanderDamage queries the receiving PlayerView.getCommanderDamage for each commander card, including opponents' commanders. Player.commanders lists owned commanders from PlayerView.getCommanders, with casts from PlayerView.getCommanderCast and tax = 2 * casts (CostAdjustment.java:58); tax is the base commander surcharge before other cost adjustments, not the final payable cost. Card.getPaperCard().getCollectorNumber supplies num; Game.getMonarch/getHasInitiative supply designations. Combat.getAttackersBlockedBy supplies blockingIds (all attackers blocked by the card, including bands); retain blocking, with blockingIds omitted or empty when not blocking. Combat.getDefenderByAttacker supplies nullable attackTarget. Read these live APIs only on the game-safe callback.
 
 ### Event kinds and sources
 
@@ -378,7 +382,7 @@ All source records below are in forge-game/src/main/java/forge/game/event; event
 | reveal | showRevealedCards, filtered to permitted seat |
 | lifeChange | Snapshot difference in PlayerView.getLife (plan choice, although GameEventPlayerLivesChanged also exists) |
 | triggerFired | Stack difference with StackItemView.isTrigger |
-| monarchChange / initiativeChange | Snapshot designation difference; exact public access path deferred to task 1.2 |
+| monarchChange / initiativeChange | Snapshot designation difference via Game.getMonarch / Game.getHasInitiative |
 | playerEliminated | PlayerView.getHasLost change |
 | gameOver | GameEventGameOutcome(lastTurnNumber, outcomeStrings, winningPlayerName, matchSummary) |
 
@@ -386,7 +390,7 @@ A snapshot is built only inside Forge-safe setGameView or object-bearing applyDe
 
 ## E. Gaps and questions for Will
 
-The original task 1.1 questions are retained below, followed by their plan 3.5 decisions or defaults. E4, E10 and E12 are decided. The other items use defaults and are finished in the named tasks; E5, E6, E7, E8, E9 and E11 retain their current schema shapes until then.
+The original task 1.1 questions are retained below, followed by their plan 3.5 decisions or defaults. E4, E10 and E12 are decided, and E8 is decided in task 1.2. The other items use defaults and are finished in the named tasks; E5, E6, E7, E9 and E11 retain their current schema shapes until then.
 
 - **E1.** Will, what server message and correlation fields should carry the String returned by describeAbility/getActivateDescription? Section 3.2 promises a tooltip reply but 3.1 names none.
 
@@ -432,9 +436,9 @@ The original task 1.1 questions are retained below, followed by their plan 3.5 d
 
 - **E8.** Will, how should mixed player/card/stack/battle references be tagged (including defenderId and flat stack.targets), and how should combat blocker assignments be represented beyond CardView.isBlocking? Are commanderDamage keys commander-card ids or player ids, where does commander tax live, and which card/state fields must be required? Counter key spelling, collector-number/designation access and required public face-down fields need confirmation in task 1.2.
 
-  Default (plan 3.5): Mixed references are tagged objects `{kind: "player" or "card" or "stack", id}`; commander damage and tax shapes are fixed with the getter table. Finished in task 1.2.
+  Decision (task 1.2): EntityRef uses `{kind, id}` tags for player/card/stack; commanderDamage is keyed by commander card, commanders carries casts and base tax (2 * casts), blockingIds lists blocked attackers, and [state-fields.md](state-fields.md) fixes the public getter paths, counter keys and visibility rules; existing optional card fields remain optional.
 
-  Status: default, finished in task 1.2
+  Status: decided (task 1.2)
 
 - **E9.** Will, what are the per-kind event payloads, zone endpoint shape, counter type/change fields, die-size field and planar-die result encoding? Should plural GameEventRollDice and other currently unlisted events (day/night, flip-onto-battlefield, snapshot restoration) get kinds, and what log fallback/correlation rules apply in task 1.8?
 

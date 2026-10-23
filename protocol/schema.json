@@ -91,48 +91,60 @@
         {
           "type": "object",
           "properties": {
-            "cardId": {
-              "$ref": "#/$defs/CardRef"
-            }
-          },
-          "required": [
-            "cardId"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "playerId": {
+            "kind": {
+              "const": "player"
+            },
+            "id": {
               "$ref": "#/$defs/PlayerRef"
             }
           },
           "required": [
-            "playerId"
+            "kind",
+            "id"
           ],
           "additionalProperties": false
         },
         {
           "type": "object",
           "properties": {
-            "planeswalkerId": {
+            "kind": {
+              "const": "card"
+            },
+            "id": {
               "$ref": "#/$defs/CardRef"
             }
           },
           "required": [
-            "planeswalkerId"
+            "kind",
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "stack"
+            },
+            "id": {
+              "$ref": "#/$defs/Int32"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
           ],
           "additionalProperties": false
         }
       ],
-      "$comment": "Plan 3.3 chosen/attackTargets show playerId and planeswalkerId; cardId is the generic card reference. Battle and stack target tagging remains E8."
+      "$comment": "Plan 3.5 E8, decided in task 1.2: tagged references distinguish integer namespaces; planeswalkers and battles use kind card. All ids use the per-seat IdMapper."
     },
     "Counters": {
       "type": "object",
       "additionalProperties": {
         "$ref": "#/$defs/Int32"
       },
-      "$comment": "forge-game/src/main/java/forge/game/GameEntityView.java:76 — Counts are integers; CounterType wire key spelling remains E8."
+      "$comment": "forge-game/src/main/java/forge/game/GameEntityView.java:76 — getCounters() returns Multiset<CounterType>; encode counts under CounterType.toString() keys (enum names, keyword originals or custom names), never localized display labels. Null means empty."
     },
     "VisibleCard": {
       "type": "object",
@@ -149,7 +161,7 @@
           "$comment": "forge-game/src/main/java/forge/game/card/CardView.java:1543"
         },
         "num": {
-          "$comment": "Plan 3.3 gives string collector number; exact lookup deferred to task 1.2.",
+          "$comment": "No public collector-number getter on CardView. Use Card.getPaperCard() (forge-game/src/main/java/forge/game/card/Card.java:7625), then IPaperCard.getCollectorNumber() (forge-core/src/main/java/forge/item/IPaperCard.java:22); PaperCard.java:79 returns a string or N.A. placeholder. Only when identity is visible.",
           "type": "string"
         },
         "tapped": {
@@ -192,7 +204,7 @@
         },
         "blocking": {
           "type": "boolean",
-          "$comment": "forge-game/src/main/java/forge/game/card/CardView.java:241 — Boolean in CardView; blocker-to-attacker arrows need an additional representation (E8)."
+          "$comment": "forge-game/src/main/java/forge/game/card/CardView.java:241 — isBlocking(); blockingIds supplies the attacker ids (task 1.2)."
         },
         "attackTarget": {
           "anyOf": [
@@ -203,7 +215,7 @@
               "type": "null"
             }
           ],
-          "$comment": "Plan 2.5 names attackTarget; GameView.getCombat() supplies the combat graph, mapping pending task 1.2/E8."
+          "$comment": "forge-game/src/main/java/forge/game/combat/Combat.java:277 — getDefenderByAttacker(Card); tag the player or card (including planeswalker/battle), null outside combat or for nonattackers."
         },
         "faceDown": {
           "type": "boolean"
@@ -226,6 +238,13 @@
         },
         "hidden": {
           "const": false
+        },
+        "blockingIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CardRef"
+          },
+          "$comment": "forge-game/src/main/java/forge/game/combat/Combat.java:432 — getAttackersBlockedBy(Card) returns every attacker blocked by this card; emit on blocking cards, otherwise omit or use an empty array."
         }
       },
       "required": [
@@ -296,7 +315,7 @@
         },
         "blocking": {
           "type": "boolean",
-          "$comment": "forge-game/src/main/java/forge/game/card/CardView.java:241 — Boolean in CardView; blocker-to-attacker arrows need an additional representation (E8)."
+          "$comment": "forge-game/src/main/java/forge/game/card/CardView.java:241 — isBlocking(); blockingIds supplies the attacker ids (task 1.2)."
         },
         "attackTarget": {
           "anyOf": [
@@ -307,7 +326,7 @@
               "type": "null"
             }
           ],
-          "$comment": "Plan 2.5 names attackTarget; GameView.getCombat() supplies the combat graph, mapping pending task 1.2/E8."
+          "$comment": "forge-game/src/main/java/forge/game/combat/Combat.java:277 — getDefenderByAttacker(Card); tag the player or card (including planeswalker/battle), null outside combat or for nonattackers."
         },
         "faceDown": {
           "const": true
@@ -327,6 +346,13 @@
         "isCommander": {
           "type": "boolean",
           "$comment": "forge-game/src/main/java/forge/game/card/CardView.java:319"
+        },
+        "blockingIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CardRef"
+          },
+          "$comment": "forge-game/src/main/java/forge/game/combat/Combat.java:432 — getAttackersBlockedBy(Card) returns every attacker blocked by this card; emit on blocking cards, otherwise omit or use an empty array."
         }
       },
       "required": [
@@ -457,11 +483,10 @@
           "$comment": "forge-game/src/main/java/forge/game/GameEntityView.java:79"
         },
         "commanderDamage": {
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/$defs/Int32"
-          },
-          "$comment": "forge-game/src/main/java/forge/game/player/PlayerView.java:346 — Keys in plan example look like player ids, but Forge queries by commander CardView; E8."
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CommanderDamage"
+          }
         },
         "manaPool": {
           "$ref": "#/$defs/ManaPool"
@@ -471,6 +496,12 @@
         },
         "eliminated": {
           "type": "boolean"
+        },
+        "commanders": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Commander"
+          }
         }
       },
       "required": [
@@ -481,7 +512,8 @@
         "commanderDamage",
         "manaPool",
         "zones",
-        "eliminated"
+        "eliminated",
+        "commanders"
       ],
       "additionalProperties": false
     },
@@ -503,14 +535,7 @@
         "targets": {
           "type": "array",
           "items": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/CardRef"
-              },
-              {
-                "$ref": "#/$defs/PlayerRef"
-              }
-            ]
+            "$ref": "#/$defs/EntityRef"
           }
         }
       },
@@ -522,7 +547,7 @@
         "targets"
       ],
       "additionalProperties": false,
-      "$comment": "forge-game/src/main/java/forge/game/spellability/StackItemView.java:146 — Also getTargetPlayers/getTargetStackItems; flat plan targets cannot distinguish these namespaces (E8)."
+      "$comment": "forge-game/src/main/java/forge/game/spellability/StackItemView.java:146,153,161 — merge getTargetCards, getTargetPlayers and getTargetStackItems as tagged EntityRef objects; null target collections mean empty."
     },
     "ActiveInput": {
       "type": "object",
@@ -632,7 +657,7 @@
         "kind"
       ],
       "additionalProperties": false,
-      "$comment": "forge-gui/src/main/java/forge/gamemodes/match/Selection.java:13 — min/max/cards/targets/chosen source; selectable field spelling and stack refs need E7/E8 approval. Only kind is universally required because waiting has no choice payload."
+      "$comment": "forge-gui/src/main/java/forge/gamemodes/match/Selection.java:13 — min/max/cards/targets/chosen source; chosen/attackTargets/targets use tagged EntityRef (E8 decided task 1.2). Input-kind fields/selectable spelling remain E7, finished in task 1.5."
     },
     "StateSnapshot": {
       "type": "object",
@@ -718,7 +743,7 @@
         "activeInput"
       ],
       "additionalProperties": false,
-      "$comment": "Plan 3.3 full per-seat shape, not the Phase 0 WsServer opening-hand placeholder. Null active/priority/phase supports pre-game/transition state; GameView.java:99 getPhase and :106 getPlayerTurn may be unset. Designation getters deferred to task 1.2."
+      "$comment": "Plan 3.3 full per-seat shape, updated by task 1.2 E8; not the Phase 0 opening-hand placeholder. Null active/priority/phase supports transitions. Game.getMonarch():172 and Game.getHasInitiative():186 provide designations; see protocol/state-fields.md for verified getters."
     },
     "PromptKind": {
       "type": "string",
@@ -1295,7 +1320,7 @@
         "activeInput"
       ],
       "additionalProperties": true,
-      "$comment": "Plan 3.3 full per-seat shape, not the Phase 0 WsServer opening-hand placeholder. Null active/priority/phase supports pre-game/transition state; GameView.java:99 getPhase and :106 getPlayerTurn may be unset. Designation getters deferred to task 1.2."
+      "$comment": "Plan 3.3 full per-seat shape, updated by task 1.2 E8; not the Phase 0 opening-hand placeholder. Null active/priority/phase supports transitions. Game.getMonarch():172 and Game.getHasInitiative():186 provide designations; see protocol/state-fields.md for verified getters."
     },
     "event": {
       "type": "object",
@@ -2132,14 +2157,7 @@
           "$ref": "#/$defs/CardRef"
         },
         "defenderId": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/CardRef"
-            },
-            {
-              "$ref": "#/$defs/PlayerRef"
-            }
-          ]
+          "$ref": "#/$defs/EntityRef"
         }
       },
       "required": [
@@ -2240,14 +2258,7 @@
           "$ref": "#/$defs/Sequence"
         },
         "defenderId": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/CardRef"
-            },
-            {
-              "$ref": "#/$defs/PlayerRef"
-            }
-          ]
+          "$ref": "#/$defs/EntityRef"
         }
       },
       "required": [
@@ -2667,6 +2678,44 @@
       ],
       "additionalProperties": true,
       "$comment": "Plan 3.5 E1: reply to describeAbility; text is IGameController.getActivateDescription return value (forge-gui/src/main/java/forge/interfaces/IGameController.java:52). Finished in task 1.12 area."
+    },
+    "CommanderDamage": {
+      "type": "object",
+      "properties": {
+        "commanderId": {
+          "$ref": "#/$defs/CardRef"
+        },
+        "damage": {
+          "$ref": "#/$defs/Int32"
+        }
+      },
+      "required": [
+        "commanderId",
+        "damage"
+      ],
+      "additionalProperties": false,
+      "$comment": "forge-game/src/main/java/forge/game/player/PlayerView.java:346 — getCommanderDamage(CardView) reads the damage map by commander.getId(), for the receiving player."
+    },
+    "Commander": {
+      "type": "object",
+      "properties": {
+        "cardId": {
+          "$ref": "#/$defs/CardRef"
+        },
+        "casts": {
+          "$ref": "#/$defs/Int32"
+        },
+        "tax": {
+          "$ref": "#/$defs/Int32"
+        }
+      },
+      "required": [
+        "cardId",
+        "casts",
+        "tax"
+      ],
+      "additionalProperties": false,
+      "$comment": "forge-game/src/main/java/forge/game/player/PlayerView.java:369 — getCommanderCast(CardView); tax = 2 * casts, matching forge-game/src/main/java/forge/game/cost/CostAdjustment.java:58. This is the base command-zone surcharge, before other cost adjustments."
     }
   }
 }
