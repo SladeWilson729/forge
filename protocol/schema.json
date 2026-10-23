@@ -554,7 +554,21 @@
       "properties": {
         "kind": {
           "type": "string",
-          "$comment": "Plan 2.2/3.3 spell declareAttackers, declareBlockers, select, waiting. Names and payloads for priority, targeting, mana payment, and mulligan remain E7; not invented here."
+          "enum": [
+            "priority",
+            "declareAttackers",
+            "declareBlockers",
+            "target",
+            "payMana",
+            "selectCards",
+            "selectEntities",
+            "convoke",
+            "selectStack",
+            "confirm",
+            "mulligan",
+            "waiting",
+            "select"
+          ]
         },
         "prompt": {
           "type": "string"
@@ -651,13 +665,19 @@
           "items": {
             "$ref": "#/$defs/EntityRef"
           }
+        },
+        "sourceCardId": {
+          "$ref": "#/$defs/CardRef"
+        },
+        "manaPoolOpen": {
+          "type": "boolean"
         }
       },
       "required": [
         "kind"
       ],
       "additionalProperties": false,
-      "$comment": "forge-gui/src/main/java/forge/gamemodes/match/Selection.java:13 — min/max/cards/targets/chosen source; chosen/attackTargets/targets use tagged EntityRef (E8 decided task 1.2). Input-kind fields/selectable spelling remain E7, finished in task 1.5."
+      "$comment": "Task 1.5: 14 listed Forge Input classes map to 11 dedicated kinds, plus waiting and select. Selection supplies min/max/cards/targets/chosen. Every card reference uses the latest completed IdMapper snapshot; missing refs are omitted until task 1.7. Waiting contains only kind; attackTargets appears only for declareAttackers."
     },
     "StateSnapshot": {
       "type": "object",

@@ -97,7 +97,8 @@ public final class SeatViewSerializer {
             }
             state.add("stack", stack);
             final JsonObject input = new JsonObject();
-            // Task 1.5 replaces this placeholder with the seat's InputInspector result.
+            // View-only seats wait. JsonSeatRemote overlays its display tracker after this walk,
+            // once endSnapshot has published all card refs; the serializer never reads Inputs.
             input.addProperty("kind", "waiting");
             state.add("activeInput", input);
             return state;

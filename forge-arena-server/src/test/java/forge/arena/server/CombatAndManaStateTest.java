@@ -29,6 +29,8 @@ import forge.gamemodes.match.input.InputBlock;
 import forge.gamemodes.match.input.InputConfirmMulligan;
 import forge.gamemodes.match.input.InputPassPriority;
 import forge.gamemodes.match.input.InputPayMana;
+import forge.gamemodes.match.input.InputSelectTargets;
+import forge.gamemodes.match.input.InputSelectEntitiesFromList;
 import forge.gamemodes.net.IRemote;
 import forge.gamemodes.net.event.GuiGameEvent;
 import forge.gamemodes.net.event.IdentifiableNetEvent;
@@ -46,6 +48,7 @@ import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 import org.testng.asserts.SoftAssert;
 
+import java.net.http.HttpClient;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -67,7 +70,7 @@ import static org.testng.Assert.*;
 
 /** Uses real Inputs and their latches; never forces a delta or resync to satisfy a step. */
 public class CombatAndManaStateTest {
-    private record Built(JsonObject state, long seq, String thread) { }
+    private record Built(JsonObject state, long seq, String thread, boolean fullSnapshot) { }
 
     private static final ITriggerEvent RIGHT_CLICK = new ITriggerEvent() {
         public int getButton() { return 3; }
@@ -104,15 +107,17 @@ public class CombatAndManaStateTest {
             @Override
             public void send(final NetEvent event) {
                 final long before = remote.getLastStateSequence();
+                final long fullBefore = remote.getLastFullSnapshotSequence();
                 remote.send(event);
                 try {
                     assertFalse(remote.isDirty(), "Snapshot exception during " + stepName);
                     if (remote.getLastStateSequence() > before) {
                         final JsonObject state = remote.getLatestState();
-                        final Built item = new Built(state, state.get("seq").getAsLong(), Thread.currentThread().getName());
+                        final Built item = new Built(state, state.get("seq").getAsLong(), Thread.currentThread().getName(),
+                                remote.getLastFullSnapshotSequence() > fullBefore);
                         built.add(item);
                         System.out.printf("[step-state] %s seq=%d thread=%s%n", stepName, item.seq(), item.thread());
-                        if (!item.thread().startsWith("Game-") && !item.thread().startsWith("AWT-EventQueue")) {
+                        if (item.fullSnapshot() && !item.thread().startsWith("Game-") && !item.thread().startsWith("AWT-EventQueue")) {
                             final Throwable trace = new AssertionError("Snapshot seq=" + item.seq()
                                     + " built on disallowed thread " + item.thread());
                             offThreadSnapshots.add(trace);
@@ -169,18 +174,19 @@ public class CombatAndManaStateTest {
         return deck;
     }
 
-    private static GameState scenario() {
+    private static GameState scenario(final boolean inputChecks) {
         final List<String> lines = new ArrayList<>(List.of("activeplayer=p0", "activephase=MAIN1",
                 "turn=1", "removesummoningsickness=true"));
         for (int seat = 0; seat < 4; seat++) {
             final String p = "p" + seat;
             lines.add(p + "life=" + (seat == 0 ? 2 : 40));
             lines.add(p + "library=" + String.join(";", Collections.nCopies(10, "Forest")));
-            lines.add(p + "hand=" + (seat == 0 ? "Balduvian Bears" : ""));
+            lines.add(p + "hand=" + (seat == 0 ? "Balduvian Bears" + (inputChecks ? ";Shock" : "") : ""));
             lines.add(p + "battlefield=" + switch (seat) {
-                case 0 -> "Grizzly Bears;Runeclaw Bear;Forest;Forest;Forest;Birds of Paradise";
+                case 0 -> "Grizzly Bears;Runeclaw Bear;Forest;Forest;Forest;Birds of Paradise"
+                        + (inputChecks ? ";Mountain" : "");
                 // Trample plus p0's low life gives the real AI a lethal attack to consider.
-                case 1 -> "Colossal Dreadmaw;Wall of Wood";
+                case 1 -> "Colossal Dreadmaw;Colossal Dreadmaw;Wall of Wood";
                 default -> "";
             });
             lines.add(p + "command=Isamaru, Hound of Konda|IsCommander");
@@ -194,9 +200,19 @@ public class CombatAndManaStateTest {
 
     @Test(timeOut = 180_000)
     public void humanCombatAndManaProduceStatePerStep() throws Exception {
+        runScenario(false);
+    }
+
+    // Shared real-Input harness: ActiveInputTest adds Shock and highlight assertions.
+    void runScenario(final boolean inputChecks) throws Exception {
         MyRandom.setRandom(new java.util.Random(7));
         final HostedMatch match = new HostedMatch();
-        final SeatWriter writer = new SeatWriter(0);
+        FModel.getPreferences().setPref(FPref.UI_SHOW_ACTIONABLE_HIGHLIGHTS, inputChecks);
+        FModel.getPreferences().setPref(FPref.UI_SHOW_AUTOTAP_PREVIEW, inputChecks);
+        final WsServer server = new WsServer("127.0.0.1", 0);
+        server.start();
+        final SeatWriter writer = server.writer(0);
+        final WsTestClient client = new WsTestClient();
         remote = new JsonSeatRemote(match, 0, writer);
         remote.setPromptResponder(this::answer);
         gui = new SeatProtocolGui(observe()) {
@@ -216,7 +232,7 @@ public class CombatAndManaStateTest {
             try {
                 final Game running = match.getGame();
                 running.getRules().setGamesPerMatch(1);
-                scenario().applyToGame(running); // Same game-thread hook as CSubmenuPuzzleSolve.
+                scenario(inputChecks).applyToGame(running); // Same game-thread hook as CSubmenuPuzzleSolve.
                 running.getPlayers().get(0).getController().getFullControl().add(FullControlFlag.NoPaymentFromManaAbility);
             } catch (Throwable ex) {
                 failure.compareAndSet(null, ex);
@@ -234,6 +250,8 @@ public class CombatAndManaStateTest {
                     .setPlayer(GamePlayerUtil.createAiPlayer("Step AI " + i)));
         }
         try {
+            client.connect(HttpClient.newHttpClient(), server.getPort(), "/ws?seat=0");
+            client.hello(0);
             // HostedMatch synchronously sets/opens the GUI before scheduling the game loop.
             // Its initial snapshots must use the same EDT as subsequent UI actions.
             edt(() -> {
@@ -247,7 +265,29 @@ public class CombatAndManaStateTest {
                     && game.getPhaseHandler().getPlayerTurn() == human.getPlayer()
                     && game.getPhaseHandler().getPhase() == PhaseType.MAIN1, "scenario main phase", false);
             final List<Card> creatures = edt(() -> List.of(card("Grizzly Bears"), card("Runeclaw Bear")));
-            final Card spell = edt(() -> human.getPlayer().getCardsIn(ZoneType.Hand).get(0));
+            if (inputChecks) {
+                assertKind("priority");
+                final Card shock = edt(() -> {
+                    for (Card card : human.getPlayer().getCardsIn(ZoneType.Hand)) {
+                        if (card.getName().equals("Shock")) return card;
+                    }
+                    throw new AssertionError("Missing Shock");
+                });
+                step("cast Shock", () -> controller.selectCard(shock.getView(), null, null),
+                        InputSelectTargets.class, state -> assertEquals(kind(state), "target"));
+                step("target p3", () -> controller.selectPlayer(game.getPlayers().get(3).getView(), null),
+                        InputPayMana.class, state -> assertEquals(kind(state), "payMana"));
+                step("tap Mountain", () -> controller.selectCard(card("Mountain").getView(), null, null),
+                        InputPayMana.class, this::checkMana);
+                step("pay red for Shock", () -> controller.useMana(MagicColor.RED), InputPassPriority.class, this::checkMana);
+                advanceUntil(input -> input instanceof InputPassPriority && game.getStack().isEmpty(), "Shock resolves", false);
+            }
+            final Card spell = edt(() -> {
+                for (Card card : human.getPlayer().getCardsIn(ZoneType.Hand)) {
+                    if (card.getName().equals("Balduvian Bears")) return card;
+                }
+                throw new AssertionError("Missing Balduvian Bears");
+            });
             final List<Card> forests = edt(() -> {
                 final List<Card> result = new ArrayList<>();
                 for (Card card : human.getPlayer().getCardsIn(ZoneType.Battlefield)) {
@@ -275,16 +315,18 @@ public class CombatAndManaStateTest {
                     });
             step("pay blue for generic", () -> controller.useMana(MagicColor.BLUE), InputPassPriority.class, this::checkMana);
             advanceUntil(input -> input instanceof InputAttack, "p0 declare attackers", false);
-            // state update on selection: task 1.5 (activeInput.chosen)
+            // Forge defaults to p1; first move elsewhere so the tested click changes chosen.
+            edt(() -> { controller.selectPlayer(game.getPlayers().get(3).getView(), null); return null; });
             selectionStep("select defender p1", () -> controller.selectPlayer(game.getPlayers().get(1).getView(), null),
-                    InputAttack.class);
+                    InputAttack.class, "player", edt(() -> game.getPlayers().get(1).getId()));
+            awaitWire(client);
             step("add attacker A", () -> controller.selectCard(creatures.get(0).getView(), null, null),
                     InputAttack.class, this::checkCombat);
             step("add attacker B", () -> controller.selectCard(creatures.get(1).getView(), null, null),
                     InputAttack.class, this::checkCombat);
-            // state update on selection: task 1.5 (activeInput.chosen)
             selectionStep("switch defender to p2", () -> controller.selectPlayer(game.getPlayers().get(2).getView(), null),
-                    InputAttack.class);
+                    InputAttack.class, "player", edt(() -> game.getPlayers().get(2).getId()));
+            awaitWire(client);
             step("re-add B against p2", () -> controller.selectCard(creatures.get(1).getView(), null, null),
                     InputAttack.class, this::checkCombat);
             step("remove attacker A", () -> controller.selectCard(creatures.get(0).getView(), null, RIGHT_CLICK),
@@ -302,38 +344,60 @@ public class CombatAndManaStateTest {
                 throw new AssertionError("AI did not attack p0 with Colossal Dreadmaw during p1's turn");
             });
             final List<Card> blockers = edt(() -> List.of(card("Grizzly Bears"), card("Balduvian Bears")));
-            // state update on selection: task 1.5 (activeInput.chosen)
+            // InputBlock preselects an attacker. Choose the other legal attacker first.
+            edt(() -> {
+                final Card other = game.getCombat().getAttackers().stream().filter(card -> card != attacker)
+                        .findFirst().orElseThrow(() -> new AssertionError("AI must attack with both Dreadmaws"));
+                controller.selectCard(other.getView(), null, null);
+                return null;
+            });
             selectionStep("select attacking Dreadmaw", () -> controller.selectCard(attacker.getView(), null, null),
-                    InputBlock.class);
+                    InputBlock.class, "card", attacker.getId());
+            awaitWire(client);
             for (Card blocker : blockers) {
                 step("block with " + blocker.getName(), () -> controller.selectCard(blocker.getView(), null, null),
                         InputBlock.class, state -> { assertTrue(game.getCombat().isBlocking(blocker, attacker)); checkCombat(state); });
             }
             healthy();
             steps.assertAll();
+            if (inputChecks) checkInputCoverage();
+            awaitWire(client);
+            reportWireRate(client);
         } finally {
             stepName = "cleanup";
             if (game != null && !game.isGameOver()) {
                 // Cleanup is game-thread work too. Release the real input latch after ending it.
                 edt(() -> {
                     game.getAction().invoke(() -> {
-                        game.setGameOver(GameEndReason.Draw);
+                        // A winner makes HostedMatch.isMatchOver() a public completion signal
+                        // AFTER its final forwarder flush (the end hook fires before that flush).
+                        game.getRules().setGamesPerMatch(1);
+                        for (var player : new ArrayList<>(game.getPlayers())) {
+                            if (player != human.getPlayer()) player.concede();
+                        }
+                        game.setGameOver(GameEndReason.AllOpponentsLost);
                         human.getInputQueue().onGameOver(true);
                     });
                     return null;
                 });
                 assertTrue(finished.await(5, TimeUnit.SECONDS), "Game cleanup fired end-game hook");
             }
+            final long cleanupDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (!edt(match::isMatchOver) && System.nanoTime() < cleanupDeadline) Thread.sleep(10);
+            assertTrue(edt(match::isMatchOver), "HostedMatch finished its post-game forwarder flush");
             // afterGameEnd synchronously calls updateGameView; teardown is UI work too.
             edt(() -> { match.endCurrentGame(); return null; });
-            writer.close();
+            client.close();
+            server.close();
+            FModel.getPreferences().setPref(FPref.UI_SHOW_ACTIONABLE_HIGHLIGHTS, false);
+            FModel.getPreferences().setPref(FPref.UI_SHOW_AUTOTAP_PREVIEW, false);
         }
         healthy();
         assertTrue(offThreadSnapshots.isEmpty(), "Snapshots outside Game-/AWT-EventQueue threads: " + offThreadSnapshots);
     }
 
     private void selectionStep(final String name, final Runnable action,
-                               final Class<? extends Input> expected) throws Exception {
+                               final Class<? extends Input> expected, final String chosenKind, final int chosenId) throws Exception {
         stepName = name;
         final JsonObject before = edt(() -> {
             assertTrue(expected.isInstance(human.getInputQueue().getInput()));
@@ -343,6 +407,7 @@ public class CombatAndManaStateTest {
             return state;
         });
         final long displays = remote.getDisplayCallCount();
+        final long fullBefore = remote.getLastFullSnapshotSequence();
         edt(() -> { action.run(); return null; });
         // A second EDT task is the barrier after the action and its queued display work.
         edt(() -> {
@@ -355,6 +420,28 @@ public class CombatAndManaStateTest {
             checkCombat(before);
             final JsonObject after = remote.getLatestState();
             checkCombat(after);
+            assertTrue(after.get("seq").getAsLong() > before.get("seq").getAsLong(), name + " needs a new state");
+            assertEquals(remote.getLastFullSnapshotSequence(), fullBefore, "Selection copies JSON without a graph walk");
+            final JsonObject input = after.getAsJsonObject("activeInput");
+            final JsonObject chosen = new JsonObject();
+            chosen.addProperty("kind", chosenKind);
+            final Object id = chosenKind.equals("card") ? remote.getIds().currentRef(chosenId).orElseThrow() : chosenId;
+            if (id instanceof Integer number) chosen.addProperty("id", number);
+            else chosen.addProperty("id", (String) id);
+            assertTrue(input.getAsJsonArray("chosen").contains(chosen), name + ": " + input);
+            if (expected == InputAttack.class) {
+                assertEquals(kind(after), "declareAttackers");
+                final com.google.gson.JsonArray defenders = new com.google.gson.JsonArray();
+                for (GameEntity defender : game.getCombat().getDefenders()) {
+                    final JsonObject ref = new JsonObject();
+                    ref.addProperty("kind", defender instanceof Card ? "card" : "player");
+                    final Object mapped = defender instanceof Card ? remote.getIds().currentRef(defender.getId()).orElseThrow() : defender.getId();
+                    if (mapped instanceof Integer number) ref.addProperty("id", number);
+                    else ref.addProperty("id", (String) mapped);
+                    defenders.add(ref);
+                }
+                assertEquals(input.getAsJsonArray("attackTargets"), defenders);
+            } else assertEquals(kind(after), "declareBlockers");
             assertEquals(ownPlayer(after).getAsJsonObject("zones").getAsJsonArray("battlefield"),
                     ownPlayer(before).getAsJsonObject("zones").getAsJsonArray("battlefield"));
             System.out.printf("[step-selection] %s displayCalls=%d->%d seq=%d->%d combat unchanged%n",
@@ -368,6 +455,86 @@ public class CombatAndManaStateTest {
             if (name.equals(card.getName())) return card;
         }
         throw new AssertionError("Missing battlefield card " + name);
+    }
+
+    private static String kind(final JsonObject state) {
+        return state.getAsJsonObject("activeInput").get("kind").getAsString();
+    }
+
+    private void assertKind(final String expected) throws Exception {
+        edt(() -> { assertEquals(kind(remote.getLatestState()), expected); return null; });
+    }
+
+    private void checkInputCoverage() throws Exception {
+        for (String expected : List.of("mulligan", "priority", "payMana", "target", "declareAttackers", "declareBlockers")) {
+            assertTrue(built.stream().anyMatch(item -> {
+                final JsonObject input = item.state().getAsJsonObject("activeInput");
+                return kind(item.state()).equals(expected) && input.has("prompt") && !input.get("prompt").getAsString().isBlank()
+                        && input.has("okLabel") && !input.get("okLabel").getAsString().isBlank()
+                        && input.has("buttons");
+            }), "Missing live kind/prompt/buttons: " + expected);
+        }
+        final int ownerId = edt(() -> human.getPlayer().getId());
+        assertTrue(built.stream().anyMatch(item -> kind(item.state()).equals("waiting")
+                && !item.state().get("activePlayerId").isJsonNull()
+                && item.state().get("activePlayerId").getAsInt() != ownerId), "Waiting while AI acts");
+        assertTrue(built.stream().anyMatch(item -> {
+            final JsonObject input = item.state().getAsJsonObject("activeInput");
+            if (!kind(item.state()).equals("payMana") || !input.has("highlighted")) return false;
+            for (JsonElement highlight : input.getAsJsonArray("highlighted")) {
+                if (highlight.getAsJsonObject().get("strength").getAsInt() == 2) return true;
+            }
+            return false;
+        }), "Auto-tap preview must push duplicate mana sources (strength 2)");
+
+        // Exercise the bare-send timer path while the real Input remains parked. This must
+        // copy JSON and reuse the last kind, never query InputQueue or walk Forge's graph.
+        final long fullBefore = remote.getLastFullSnapshotSequence();
+        final String beforeKind = kind(remote.getLatestState());
+        final FutureTask<Void> timer = new FutureTask<>(() -> {
+            gui.showPromptMessage(null, "Timer display test", (forge.game.card.CardView) null);
+            final long copied = remote.getLastStateSequence();
+            gui.showPromptMessage(null, "Timer display test", (forge.game.card.CardView) null);
+            assertEquals(remote.getLastStateSequence(), copied, "Identical display JSON sends no redundant state");
+            return null;
+        });
+        new Thread(timer, "Arena-test-auto-pass-timer").start();
+        timer.get(5, TimeUnit.SECONDS);
+        assertEquals(remote.getLastFullSnapshotSequence(), fullBefore);
+        assertEquals(kind(remote.getLatestState()), beforeKind);
+        assertEquals(remote.getLatestState().getAsJsonObject("activeInput").get("prompt").getAsString(), "Timer display test");
+    }
+
+    private void awaitWire(final WsTestClient client) throws Exception {
+        final long seq = remote.getLastStateSequence();
+        final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (System.nanoTime() < deadline) {
+            if (client.history().stream().map(WsTestClient.Received::object).anyMatch(message ->
+                    "state".equals(message.get("type").getAsString()) && message.get("seq").getAsLong() >= seq)) return;
+            healthy();
+            Thread.sleep(10);
+        }
+        fail("Writer did not send state >= " + seq);
+    }
+
+    private void reportWireRate(final WsTestClient client) {
+        final Set<Long> copies = new java.util.HashSet<>();
+        built.stream().filter(item -> !item.fullSnapshot()).forEach(item -> copies.add(item.seq()));
+        final List<Long> arrivals = new ArrayList<>();
+        for (WsTestClient.Received received : client.history()) {
+            final JsonObject message = received.object();
+            if (!"state".equals(message.get("type").getAsString())) continue;
+            assertTrue(schema.validate(received.json(), InputFormat.JSON).isEmpty(), "Wire state validates");
+            if (copies.contains(message.get("seq").getAsLong())) arrivals.add(received.at());
+        }
+        assertFalse(arrivals.isEmpty(), "At least one activeInput-only state reached the socket");
+        int peak = 0;
+        for (long at : arrivals) {
+            final int count = (int) arrivals.stream().filter(time -> time >= at && time - at < TimeUnit.SECONDS.toNanos(1)).count();
+            peak = Math.max(peak, count);
+        }
+        assertTrue(peak <= 10, "Coalesced activeInput-only peak/s: " + peak);
+        System.out.printf("[input-wire] activeInput-only=%d peak/s=%d%n", arrivals.size(), peak);
     }
 
     private void healthy() {
@@ -389,6 +556,14 @@ public class CombatAndManaStateTest {
                 final Input input = human.getInputQueue().getInput();
                 if (!ready(input)) return false;
                 if (target.test(input)) return true;
+                // The coin toss can ask this human to choose the starting player. This is
+                // a real selectable Player input, not a blocking getChoices dialog.
+                if (stepName.equals("initialization") && input instanceof InputSelectEntitiesFromList<?> entities
+                        && entities.getValidChoices().contains(human.getPlayer()) && input != lastPassed.get()) {
+                    lastPassed.set(input);
+                    controller.selectPlayer(human.getPlayer().getView(), null);
+                    return false;
+                }
                 if (p1Only && game.getPhaseHandler().getPlayerTurn() != human.getPlayer()
                         && game.getPhaseHandler().getPlayerTurn() != game.getPlayers().get(1)) {
                     fail("AI did not attack p0 within p1's turn; scenario was not loosened");

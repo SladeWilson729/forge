@@ -16,16 +16,16 @@ Sources are repository-relative to this commit. The enum signatures below preser
 | `openView` | SERVER | void | TrackableCollection | send | no | ignored: no separate open-view message; local-player association supplies seat context (E10) |
 | `afterGameEnd` | SERVER | void | none | syncAndSend | no | event.kind=gameOver from outcome stream; state reflects final game; no distinct lifecycle message (E10) |
 | `showCombat` | SERVER | void | none | syncAndSend | no | state.players[].zones.battlefield: attacking/blocking/attackTarget from refreshed combat |
-| `showPromptMessage` | SERVER | void | PlayerView, String, CardView | send / syncAndSend | no | state.activeInput.prompt; card context has no named activeInput field (E7) |
+| `showPromptMessage` | SERVER | void | PlayerView, String, CardView | send / syncAndSend | no | state.activeInput.prompt/sourceCardId (E7 decided task 1.5) |
 | `updateDrawOffer` | SERVER | void | DrawOfferMessage.Status | send | no | ignored: decided out of v1 (plan 3.5 E12) |
-| `updateButtons` | SERVER | void | PlayerView, String, String, boolean, boolean, boolean | send | no | state.activeInput.okLabel/cancelLabel/buttons.*.enabled; focus1 and owner not represented (E7) |
+| `updateButtons` | SERVER | void | PlayerView, String, String, boolean, boolean, boolean | send | no | state.activeInput.okLabel/cancelLabel/buttons.*.enabled; owner implicit in receiving seat; focus1 local UI hint |
 | `flashIncorrectAction` | SERVER | void | none | send | no | message.level=rejected with generic text; Forge call has no reason text (plan 3.5 E3) |
 | `alertUser` | SERVER | void | none | send | no | attention: type and seq only; taskbar flash when the action is on this seat (plan 3.5 E10) |
 | `enableOverlay` | SERVER | void | none | send | no | ignored: no overlay field/message specified; decided local/ignored in plan 3.5 E10 |
 | `disableOverlay` | SERVER | void | none | send | no | ignored: no overlay field/message specified; decided local/ignored in plan 3.5 E10 |
 | `finishGame` | SERVER | void | none | syncAndSend | no | ignored: no distinct finish-view message; gameOver event is outcome-driven; decided local/ignored in plan 3.5 E10 |
-| `showManaPool` | SERVER | void | PlayerView | send | no | state.activeInput: payment UI intent (exact field absent; E7) |
-| `hideManaPool` | SERVER | void | PlayerView | send | no | state.activeInput: end payment UI intent (exact field absent; E7) |
+| `showManaPool` | SERVER | void | PlayerView | send | no | state.activeInput.manaPoolOpen = true |
+| `hideManaPool` | SERVER | void | PlayerView | send | no | state.activeInput.manaPoolOpen = false |
 | `setPanelSelection` | SERVER | void | CardView | syncAndSend | no | ignored: no panel-focus field specified; decided local/ignored in plan 3.5 E10 |
 | `getAbilityToPlay` | SERVER | SpellAbilityView | CardView, List, ITriggerEvent | syncAndSendAndWait | yes | prompt.kind=chooseAbility, sourceCardId=hostCard, options=[{abilityId,text}]; promptReply.result=abilityId |
 | `assignCombatDamage` | SERVER | Map | CardView, List, int, GameEntityView, boolean, boolean | syncAndSendAndWait | yes | prompt.kind=assignCombatDamage, sourceCardId=attacker, options=blockers; damage/defender/flags and allocation result encoding E5 |
@@ -43,7 +43,7 @@ Sources are repository-relative to this commit. The enum signatures below preser
 | `chooseEntitiesForEffect` | SERVER | List | String, List, int, int, DelayedReveal | syncAndSendAndWait | yes | prompt.kind=chooseEntities, title=title, options=optionList, min=min, max=max; list result and delayedReveal E5 |
 | `manipulateCardList` | SERVER | List | String, Iterable, Iterable, boolean, boolean, boolean | syncAndSendAndWait | yes | prompt.kind=manipulateList, title=title, options=cards; manipulable/destination flags and ordered result E5 |
 | `setCard` | SERVER | void | CardView | syncAndSend | no | ignored: preview card has no named field/message; decided local/ignored in plan 3.5 E10 |
-| `setSelection` | SERVER | void | Selection | syncAndSend | no | state.activeInput.chosen/min/max/targets/selectable (Input fields finished in E7; mixed references use EntityRef) |
+| `setSelection` | SERVER | void | Selection | syncAndSend | no | state.activeInput.chosen/min/max/targets/selectable (E7 decided task 1.5; mixed references use EntityRef) |
 | `showRevealedCards` | SERVER | void | Iterable | syncAndSend | no | event.kind=reveal, cardIds=filtered cards; temporary visibility from preceding sync |
 | `hideRevealedCards` | SERVER | void | none | send | no | ignored: plan has reveal but no clear-reveal message; decided local/ignored in plan 3.5 E10 |
 | `setWeaklySelectable` | SERVER | void | Iterable | send (after updateGameView) | no | state.activeInput.highlighted[].id/strength (duplicates retain strength) |
@@ -348,10 +348,28 @@ The state envelope flattens StateSnapshot alongside type/seq, matching section 3
 | HiddenCard | `id`: string; `hidden`: const `true` |
 | FaceDownCard | `id`: `CardRef`; `tapped?`: boolean; `sick?`: boolean; `power?`: `Int32`; `toughness?`: `Int32`; `damage?`: `Int32`; `counters?`: `Counters`; `attachedTo?`: `EntityRef` or null; `attacking?`: boolean; `blocking?`: boolean; `attackTarget?`: `EntityRef` or null; `faceDown`: const `true`; `controllerId?`: `PlayerRef`; `ownerId?`: `PlayerRef`; `token?`: boolean; `isCommander?`: boolean; `blockingIds?`: array of `CardRef` |
 | StackItem | `stackId`: `Int32`; `sourceCardId`: `CardRef`; `controllerId`: `PlayerRef`; `text`: string; `targets`: array of `EntityRef` |
-| ActiveInput | `kind`: string; `prompt?`: string; `okLabel?`: string; `cancelLabel?`: string; `buttons?`: object; `highlighted?`: array of object; `chosen?`: array of `EntityRef`; `attackTargets?`: array of `EntityRef`; `min?`: `Int32`; `max?`: `Int32`; `selectable?`: array of `CardRef`; `targets?`: array of `EntityRef` |
+| ActiveInput | `kind`: enum (see below); `prompt?`: string; `sourceCardId?`: `CardRef`; `manaPoolOpen?`: boolean; `okLabel?`: string; `cancelLabel?`: string; `buttons?`: object; `highlighted?`: array of object; `chosen?`: array of `EntityRef`; `attackTargets?`: array of `EntityRef`; `min?`: `Int32`; `max?`: `Int32`; `selectable?`: array of `CardRef`; `targets?`: array of `EntityRef` |
 | SeatClock | `remainingMs`: integer; `running`: boolean |
 
-ActiveInput.buttons is `{ok:{enabled:boolean},cancel:{enabled:boolean}}`; highlighted is `[{id:CardRef,strength:1 or 2}]`. Chosen, attackTargets and targets use tagged EntityRef objects, as do stack.targets, defenderId, attachedTo and attackTarget. These replace the original playerId/planeswalkerId forms. Input kind fields and selectable spelling remain E7. Waiting carries only kind; other kinds derive their available fields from Selection, updateButtons, showPromptMessage and highlight calls.
+ActiveInput.buttons is `{ok:{enabled:boolean},cancel:{enabled:boolean}}`; highlighted is `[{id:CardRef,strength:1 or 2}]`. Chosen, attackTargets and targets use tagged EntityRef objects, as do stack.targets, defenderId, attachedTo and attackTarget. These replace the original playerId/planeswalkerId forms. E7 is decided in task 1.5. Waiting carries only kind, suppressing stale actions; other kinds derive their available fields from Selection, updateButtons, showPromptMessage and highlight calls. sourceCardId is the prompt card; manaPoolOpen records showManaPool/hideManaPool (initially false). Optional fields appear once Forge supplies them. attackTargets appears only during declareAttackers and includes every live Combat defender. Button owner is implicit in the receiving seat; focus is a local UI hint.
+
+| Input class | activeInput.kind |
+|---|---|
+| InputPassPriority | priority |
+| InputAttack | declareAttackers |
+| InputBlock | declareBlockers |
+| InputSelectTargets | target |
+| InputPayMana, InputPayManaOfCostPayment | payMana |
+| InputSelectCardsFromList | selectCards |
+| InputSelectEntitiesFromList | selectEntities |
+| InputSelectCardsForConvokeOrImprovise | convoke |
+| InputSelectStackItems | selectStack |
+| InputConfirm | confirm |
+| InputConfirmMulligan, InputLondonMulligan, InputChooseStartingHand | mulligan |
+| InputLockUI, no input, awaitNextInput | waiting |
+| Other Input classes | select |
+
+These mappings yield 13 distinct kinds. Exact classes take precedence over known subclasses; unknown classes use Selection and buttons and are logged once. selectable comes from Selection.cards, with min/max, targets and chosen copied from the same Selection. Every card position, including highlights and tagged references, uses IdMapper.currentRef; absent references are omitted and logged once until prompt-offered ids arrive in task 1.7. Duplicate highlights have strength 2. Display changes send a copy of the latest snapshot with a new sequence through normal SeatWriter coalescing; they never walk the game graph. InputQueue and legal defenders are read only within EDT/Game-thread display calls. Timer calls retain the last classification.
 
 ZoneType contains all Forge enum spellings (Hand through None), while the snapshot zone **property names** are lowercase hand/library/graveyard/exile/command/battlefield. Library is `{count:integer}`; the other snapshot zones are arrays of Card. Counter maps have CounterType.toString() keys and integer counts (not localized display names); a null Forge counter multiset becomes an empty object. Card fields are optional unless id/hidden/faceDown identifies the variant, because the plan does not settle the complete required set for each zone. All visibility checks must run server-side: canBeShownTo alone does not hide face-down identity; also use canFaceDownBeShownTo. Hidden cards contain only opaque id and hidden=true. Unknown face-down cards omit name/set/num but keep allowed public characteristics. IdMapper reissues hidden ids on hidden-zone re-entry and face-down transitions; do not expose Forge object graphs or hidden-id fields.
 
@@ -390,7 +408,7 @@ A snapshot is built only inside Forge-safe setGameView or object-bearing applyDe
 
 ## E. Gaps and questions for Will
 
-The original task 1.1 questions are retained below, followed by their plan 3.5 decisions or defaults. E4, E10 and E12 are decided, and E8 is decided in task 1.2. The other items use defaults and are finished in the named tasks; E5, E6, E7, E9 and E11 retain their current schema shapes until then.
+The original task 1.1 questions are retained below, followed by their plan 3.5 decisions or defaults. E4, E10 and E12 are decided; E8 is decided in task 1.2 and E7 in task 1.5. The other items use defaults and are finished in the named tasks; E5, E6, E9 and E11 retain their current schema shapes until then.
 
 - **E1.** Will, what server message and correlation fields should carry the String returned by describeAbility/getActivateDescription? Section 3.2 promises a tooltip reply but 3.1 names none.
 
@@ -430,9 +448,9 @@ The original task 1.1 questions are retained below, followed by their plan 3.5 d
 
 - **E7.** Will, what are the complete activeInput kind names and context fields for priority, targeting, mana payment, mulligan and fallback selection? Are selectable/targets the intended names, and where do prompt card, button owner/focus, and showManaPool/hideManaPool state belong?
 
-  Default (plan 3.5): `activeInput` fields are defined per Input kind by `InputInspector`. Finished in task 1.5.
+  Decision (task 1.5): ActiveInputTracker defines the kinds and fields in section D, including prompt sourceCardId, tagged chosen/targets, mapped highlights and manaPoolOpen; selection-only changes produce states from cached JSON.
 
-  Status: default, finished in task 1.5
+  Status: decided (task 1.5)
 
 - **E8.** Will, how should mixed player/card/stack/battle references be tagged (including defenderId and flat stack.targets), and how should combat blocker assignments be represented beyond CardView.isBlocking? Are commanderDamage keys commander-card ids or player ids, where does commander tax live, and which card/state fields must be required? Counter key spelling, collector-number/designation access and required public face-down fields need confirmation in task 1.2.
 
