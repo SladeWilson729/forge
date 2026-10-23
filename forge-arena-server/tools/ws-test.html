@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Forge Arena WebSocket test</title>
+  <style>
+    body { max-width: 64rem; margin: 2rem auto; padding: 0 1rem; font-family: system-ui, sans-serif; }
+    pre { padding: 1rem; background: #f0f2f4; white-space: pre-wrap; overflow-wrap: anywhere; }
+  </style>
+</head>
+<body>
+  <h1>Forge Arena WebSocket test</h1>
+  <p>Endpoint: <code>ws://localhost:36800/ws</code></p>
+  <p id="status" role="status">Connecting…</p>
+  <pre id="messages" aria-label="Received messages"></pre>
+  <script>
+    const status = document.getElementById('status');
+    const messages = document.getElementById('messages');
+    const socket = new WebSocket('ws://localhost:36800/ws');
+    socket.addEventListener('open', () => { status.textContent = 'Connected'; });
+    socket.addEventListener('close', event => { status.textContent = `Disconnected (code ${event.code})`; });
+    socket.addEventListener('error', () => { status.textContent = 'Connection error. Check that ArenaServer is running.'; });
+    socket.addEventListener('message', event => {
+      let text = event.data;
+      try { text = JSON.stringify(JSON.parse(text), null, 2); } catch (_) { /* Display non-JSON messages as received. */ }
+      messages.append(document.createTextNode(text + '\n\n'));
+    });
+  </script>
+</body>
+</html>
