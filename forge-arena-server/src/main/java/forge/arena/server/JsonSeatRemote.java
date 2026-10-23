@@ -4,6 +4,8 @@ import com.google.gson.JsonObject;
 import forge.arena.server.view.ActiveInputTracker;
 import forge.arena.server.view.IdMapper;
 import forge.arena.server.view.SeatViewSerializer;
+import forge.arena.server.prompt.PromptCodec;
+import forge.deck.CardPool;
 import forge.game.Game;
 import forge.game.GameEntityView;
 import forge.game.player.PlayerView;
@@ -25,6 +27,8 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicLong;
 
 /** Synchronous Forge-to-JSON boundary. Only SeatWriter does socket work. */
@@ -52,10 +56,16 @@ public final class JsonSeatRemote implements IRemote {
     private volatile JsonObject latestState;
     private volatile long lastFullSnapshotSequence;
     private final AtomicLong displayCalls = new AtomicLong();
-    private PromptResponder promptResponder = event -> {
-        LOG.log(System.Logger.Level.ERROR, "Unexpected blocking seat-view call: {0}", event.getMethod());
-        return null; // Task 1.6 supplies the real prompt future.
-    };
+    private volatile PromptResponder promptResponder;
+    private final PromptCodec promptCodec = new PromptCodec();
+    private static final class PendingPrompt {
+        final PromptCodec.Prompt prompt;
+        final CompletableFuture<Object> answer = new CompletableFuture<>();
+        volatile String wire;
+        PendingPrompt(PromptCodec.Prompt prompt) { this.prompt = prompt; }
+    }
+    private final ConcurrentHashMap<Integer, PendingPrompt> pending = new ConcurrentHashMap<>();
+    private volatile String lastReplyThread;
 
     public JsonSeatRemote(final Game game, final PlayerView seat, final SeatWriter writer) {
         this.game = game;
@@ -63,12 +73,14 @@ public final class JsonSeatRemote implements IRemote {
         this.writer = writer;
         this.match = null;
         this.seatIndex = -1;
+        writer.attachRemote(this);
     }
 
     public JsonSeatRemote(final HostedMatch match, final int seatIndex, final SeatWriter writer) {
         this.match = Objects.requireNonNull(match);
         this.seatIndex = seatIndex;
         this.writer = writer;
+        writer.attachRemote(this);
     }
 
     public void setPromptResponder(final PromptResponder responder) {
@@ -210,9 +222,62 @@ public final class JsonSeatRemote implements IRemote {
     @Override
     public Object sendAndWait(final IdentifiableNetEvent event) {
         if (event instanceof GuiGameEvent gui) {
-            return promptResponder.answer(gui);
+            LOG.log(System.Logger.Level.INFO, "[prompt] sendAndWait method={0} thread={1} requestId={2}",
+                    gui.getMethod(), Thread.currentThread().getName(), gui.getId());
+            if (promptResponder != null) return promptResponder.answer(gui);
+            if (gui.getMethod() == forge.gamemodes.net.ProtocolMethod.sideboard) {
+                LOG.log(System.Logger.Level.INFO, "[prompt] sideboard: unchanged main deck (out of v1)");
+                return ((CardPool) gui.getObjects()[1]).toFlatList();
+            }
+            final PromptCodec.Prompt prompt = promptCodec.encode(gui, new PromptCodec.Context(game, seat, ids));
+            final PendingPrompt request = new PendingPrompt(prompt);
+            if (pending.putIfAbsent(prompt.requestId(), request) != null) throw new IllegalStateException("Duplicate requestId");
+            try {
+                final JsonObject message = prompt.json();
+                writer.send(message);
+                request.wire = WsServer.GSON.toJson(message);
+                // No bridge lock is held. A reply completes on I/O, even when THIS is the EDT.
+                return request.answer.get();
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Interrupted while awaiting prompt " + prompt.requestId(), ex);
+            } catch (ExecutionException ex) {
+                throw new IllegalStateException("Prompt failed", ex.getCause());
+            } finally {
+                pending.remove(prompt.requestId(), request); // Waiting thread, never Netty I/O.
+            }
         }
         LOG.log(System.Logger.Level.ERROR, "Unexpected blocking seat-view call: {0}", event.getClass().getSimpleName());
         return null;
     }
+
+    /** I/O path: lock-free lookup, pure decoding, future completion. Never dispatch to the EDT. */
+    void promptReply(final JsonObject reply) {
+        try {
+            final int id = PromptCodec.integer(reply.get("requestId"));
+            final PendingPrompt request = pending.get(id);
+            if (request == null || request.answer.isDone()) {
+                LOG.log(System.Logger.Level.INFO, "[prompt] Ignoring unknown/finished requestId {0}", id);
+                return;
+            }
+            final Object answer = promptCodec.decode(request.prompt, reply);
+            final String thread = Thread.currentThread().getName();
+            lastReplyThread = thread;
+            if (request.answer.complete(answer)) LOG.log(System.Logger.Level.INFO, "[prompt] Completed {0} on {1}", id, thread);
+        } catch (IllegalArgumentException | IllegalStateException ex) {
+            final JsonObject message = new JsonObject();
+            message.addProperty("type", "message"); message.addProperty("level", "rejected");
+            message.addProperty("text", ex.getMessage());
+            writer.sendFromIo(message);
+        }
+    }
+
+    /** Writer-thread reconnect replay. Envelopes retain their seq and requestId, like cached state. */
+    List<String> pendingPromptMessages() {
+        return pending.values().stream().filter(request -> !request.answer.isDone() && request.wire != null)
+                .sorted(java.util.Comparator.comparingInt(request -> request.prompt.requestId()))
+                .map(request -> request.wire).toList();
+    }
+
+    String getLastReplyThread() { return lastReplyThread; }
 }

@@ -778,32 +778,67 @@
         "assignCombatDamage",
         "assignGeneric",
         "manipulateList",
-        "chooseAbility",
-        "sideboard"
+        "chooseAbility"
       ]
     },
     "PromptOption": {
-      "$comment": "forge-gui/src/main/java/forge/gui/interfaces/IGuiGame.java:189 — Arbitrary T, GameEntityView, PaperCard, and byte targets require a tagged option encoding; E5. No Java serialization or function bodies are JSON payloads."
-    },
-    "AbilityOption": {
       "type": "object",
       "properties": {
-        "abilityId": {
-          "$ref": "#/$defs/Int32"
+        "optionId": {
+          "$ref": "#/$defs/OptionId"
         },
-        "text": {
-          "type": "string",
-          "$comment": "forge-game/src/main/java/forge/game/spellability/SpellAbilityView.java:53"
+        "label": {
+          "type": "string"
+        },
+        "cardRef": {
+          "$ref": "#/$defs/CardRef"
+        },
+        "name": {
+          "type": "string"
+        },
+        "set": {
+          "type": "string"
+        },
+        "num": {
+          "type": "string"
         }
       },
       "required": [
-        "abilityId",
-        "text"
+        "optionId",
+        "label"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "$comment": "Prompt-scoped option slots retain the exact offered Java objects. Plan 3.5 E5 corrected for task 1.6: owner-only prompts reveal offered face-up cards; face-down identity still requires CardVisibility.forSeat permission. Otherwise label is Face-down card with an opaque cardRef and no name/set/num. No Java serialization."
+    },
+    "AbilityOption": {
+      "$ref": "#/$defs/PromptOption"
     },
     "PromptResult": {
-      "$comment": "forge-gui/src/main/java/forge/gui/interfaces/IGuiGame.java:44 — Result is correlated with the pending prompt, including generic choices, maps and OrderResult; full wire encoding remains E5."
+      "anyOf": [
+        {
+          "$ref": "#/$defs/OptionIds"
+        },
+        {
+          "$ref": "#/$defs/OrderResult"
+        },
+        {
+          "$ref": "#/$defs/AllocationResult"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "integer",
+          "minimum": -1
+        },
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "$comment": "requestId selects the pending prompt kind. PromptCodec enforces its result type, bounds, offered IDs, capacities and sum; no kind supplied by the client can change that."
     },
     "TriggerDecision": {
       "type": "string",
@@ -1526,30 +1561,368 @@
           }
         },
         "min": {
-          "$ref": "#/$defs/Int32"
+          "type": "integer",
+          "minimum": 0
         },
         "max": {
-          "$ref": "#/$defs/Int32"
+          "type": "integer",
+          "minimum": 0
         },
         "sourceCardId": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/CardRef"
-            },
-            {
-              "type": "null"
-            }
+          "$ref": "#/$defs/CardRef"
+        },
+        "default": {
+          "$ref": "#/$defs/PromptResult"
+        },
+        "text": {
+          "type": "string"
+        },
+        "selected": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/OptionId"
+          },
+          "uniqueItems": true
+        },
+        "revealOnly": {
+          "type": "boolean"
+        },
+        "single": {
+          "type": "boolean"
+        },
+        "optional": {
+          "type": "boolean"
+        },
+        "top": {
+          "type": "string"
+        },
+        "source": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/OptionId"
+          },
+          "uniqueItems": true
+        },
+        "destination": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/OptionId"
+          },
+          "uniqueItems": true
+        },
+        "remainingMin": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "remainingMax": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sideboardingMode": {
+          "type": "boolean"
+        },
+        "rememberAllowed": {
+          "type": "boolean"
+        },
+        "initialInput": {
+          "type": [
+            "string",
+            "null"
           ]
+        },
+        "amount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "atLeastOne": {
+          "type": "boolean"
+        },
+        "capacities": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "lethal": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "overrideOrder": {
+          "type": "boolean"
+        },
+        "divideDamage": {
+          "type": "boolean"
+        },
+        "maySkip": {
+          "type": "boolean"
+        },
+        "defenderOptionId": {
+          "$ref": "#/$defs/OptionId"
+        },
+        "manipulable": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/OptionId"
+          },
+          "uniqueItems": true
+        },
+        "toTop": {
+          "type": "boolean"
+        },
+        "toBottom": {
+          "type": "boolean"
+        },
+        "toAnywhere": {
+          "type": "boolean"
+        },
+        "revealed": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RevealedPromptCard"
+          }
+        },
+        "revealMessage": {
+          "type": "string"
+        },
+        "restrictedInput": {
+          "type": "boolean"
         }
       },
       "required": [
         "type",
         "seq",
         "requestId",
-        "kind"
+        "kind",
+        "title",
+        "options",
+        "min",
+        "max",
+        "default"
       ],
-      "additionalProperties": true,
+      "additionalProperties": false,
       "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "choose"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "default": {
+                "$ref": "#/$defs/OptionIds"
+              }
+            },
+            "required": [
+              "selected",
+              "revealOnly"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "chooseEntities"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "default": {
+                "$ref": "#/$defs/OptionIds"
+              }
+            },
+            "required": [
+              "single"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "order"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "default": {
+                "$ref": "#/$defs/OrderResult"
+              }
+            },
+            "required": [
+              "top",
+              "source",
+              "destination",
+              "remainingMin",
+              "remainingMax",
+              "rememberAllowed",
+              "sideboardingMode"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "confirm"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "default": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "text"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "option"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "default": {
+                "type": "integer",
+                "minimum": -1
+              }
+            },
+            "required": [
+              "text"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "number"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "default": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^[+-]?[0-9]+$"
+              }
+            },
+            "required": [
+              "text",
+              "initialInput",
+              "restrictedInput"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "text"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "default": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "text",
+              "initialInput",
+              "restrictedInput"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "assignCombatDamage"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "default": {
+                "$ref": "#/$defs/AllocationResult"
+              }
+            },
+            "required": [
+              "amount",
+              "lethal",
+              "overrideOrder",
+              "divideDamage",
+              "maySkip"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "assignGeneric"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "default": {
+                "$ref": "#/$defs/AllocationResult"
+              }
+            },
+            "required": [
+              "amount",
+              "atLeastOne",
+              "capacities"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "manipulateList"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "default": {
+                "$ref": "#/$defs/OptionIds"
+              }
+            },
+            "required": [
+              "manipulable",
+              "toTop",
+              "toBottom",
+              "toAnywhere"
+            ]
+          }
+        },
         {
           "if": {
             "properties": {
@@ -1560,16 +1933,11 @@
           },
           "then": {
             "properties": {
-              "options": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/$defs/AbilityOption"
-                }
+              "default": {
+                "$ref": "#/$defs/OptionId"
               }
             },
-            "required": [
-              "options"
-            ]
+            "required": []
           }
         }
       ]
@@ -2342,7 +2710,7 @@
         "requestId",
         "result"
       ],
-      "additionalProperties": true
+      "additionalProperties": false
     },
     "setYield": {
       "type": "object",
@@ -2736,6 +3104,77 @@
       ],
       "additionalProperties": false,
       "$comment": "forge-game/src/main/java/forge/game/player/PlayerView.java:369 — getCommanderCast(CardView); tax = 2 * casts, matching forge-game/src/main/java/forge/game/cost/CostAdjustment.java:58. This is the base command-zone surcharge, before other cost adjustments."
+    },
+    "OptionId": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "OptionIds": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/OptionId"
+      },
+      "uniqueItems": true
+    },
+    "OrderResult": {
+      "type": "object",
+      "properties": {
+        "ordered": {
+          "$ref": "#/$defs/OptionIds"
+        },
+        "remember": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ordered",
+        "remember"
+      ],
+      "additionalProperties": false
+    },
+    "AllocationResult": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "optionId": {
+            "$ref": "#/$defs/OptionId"
+          },
+          "amount": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "optionId",
+          "amount"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "RevealedPromptCard": {
+      "type": "object",
+      "properties": {
+        "cardRef": {
+          "$ref": "#/$defs/CardRef"
+        },
+        "label": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "set": {
+          "type": "string"
+        },
+        "num": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cardRef"
+      ],
+      "additionalProperties": false
     }
   }
 }

@@ -64,7 +64,7 @@ public final class PayloadFilter {
      * Task 1.6's typed option codec must use this for EVERY CardRef, including nested options,
      * after promptFor. No arbitrary JSON key guessing or labels containing card identities.
      * Missing references are omitted/rejected, never replaced with a raw Forge ID. Prompt-only
-     * offered references not present in the snapshot arrive with task 1.7.
+     * offered references not present in the snapshot are scoped by PromptCodec (task 1.6).
      */
     public Optional<JsonElement> promptCardRef(final int realId, final IdMapper ids) {
         return ids.currentRef(realId).map(PayloadFilter::jsonRef);

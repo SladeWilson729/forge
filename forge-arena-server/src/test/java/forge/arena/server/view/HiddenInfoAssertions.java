@@ -40,7 +40,7 @@ final class HiddenInfoAssertions {
                 final String key = entry.getKey();
                 final boolean cardReference = switch (key) {
                     case "id" -> cardObject;
-                    case "cardId", "sourceCardId", "commanderId", "cardIds", "blockingIds" -> true;
+                    case "cardRef", "cardId", "sourceCardId", "commanderId", "cardIds", "blockingIds" -> true;
                     default -> false;
                 };
                 scanIds(entry.getValue(), realId, cardReference, path + "." + key, payload);

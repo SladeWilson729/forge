@@ -32,6 +32,7 @@ final class WsTestClient implements WebSocket.Listener, AutoCloseable {
     volatile Throwable error;
     volatile long openedAt;
     private WebSocket socket;
+    volatile java.util.function.Consumer<JsonObject> onMessage;
 
     void connect(final HttpClient http, final int port, final String path) throws Exception {
         socket = http.newWebSocketBuilder().connectTimeout(Duration.ofSeconds(5))
@@ -51,6 +52,10 @@ final class WsTestClient implements WebSocket.Listener, AutoCloseable {
             final Received received = new Received(text.toString(), System.nanoTime());
             history.add(received);
             messages.add(received);
+            if (onMessage != null) {
+                try { onMessage.accept(received.object()); }
+                catch (Throwable ex) { error = ex; }
+            }
             text.setLength(0);
         }
         webSocket.request(1);
@@ -86,6 +91,11 @@ final class WsTestClient implements WebSocket.Listener, AutoCloseable {
 
     List<Received> history() {
         return List.copyOf(history);
+    }
+
+    void send(final JsonObject message) {
+        socket.sendText(WsServer.GSON.toJson(message), true)
+                .whenComplete((ignored, ex) -> { if (ex != null) error = ex; });
     }
 
     @Override

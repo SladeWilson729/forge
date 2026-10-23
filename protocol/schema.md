@@ -27,21 +27,21 @@ Sources are repository-relative to this commit. The enum signatures below preser
 | `showManaPool` | SERVER | void | PlayerView | send | no | state.activeInput.manaPoolOpen = true |
 | `hideManaPool` | SERVER | void | PlayerView | send | no | state.activeInput.manaPoolOpen = false |
 | `setPanelSelection` | SERVER | void | CardView | syncAndSend | no | ignored: no panel-focus field specified; decided local/ignored in plan 3.5 E10 |
-| `getAbilityToPlay` | SERVER | SpellAbilityView | CardView, List, ITriggerEvent | syncAndSendAndWait | yes | prompt.kind=chooseAbility, sourceCardId=hostCard, options=[{abilityId,text}]; promptReply.result=abilityId |
-| `assignCombatDamage` | SERVER | Map | CardView, List, int, GameEntityView, boolean, boolean | syncAndSendAndWait | yes | prompt.kind=assignCombatDamage, sourceCardId=attacker, options=blockers; damage/defender/flags and allocation result encoding E5 |
-| `assignGenericAmount` | SERVER | Map | CardView, Map, int, boolean, String | syncAndSendAndWait | yes | prompt.kind=assignGeneric, sourceCardId=effectSource; targets/amount/atLeastOne/amountLabel and allocation result encoding E5 |
+| `getAbilityToPlay` | SERVER | SpellAbilityView | CardView, List, ITriggerEvent | syncAndSendAndWait | yes | prompt.kind=chooseAbility, sourceCardId=hostCard, options=[{optionId,label}]; promptReply.result=optionId |
+| `assignCombatDamage` | SERVER | Map | CardView, List, int, GameEntityView, boolean, boolean | syncAndSendAndWait | yes | prompt.kind=assignCombatDamage; amount, lethal thresholds, order/skip flags and optional defenderOptionId; result allocations |
+| `assignGenericAmount` | SERVER | Map | CardView, Map, int, boolean, String | syncAndSendAndWait | yes | prompt.kind=assignGeneric; amount, capacities, atLeastOne; result allocations |
 | `message` | SERVER | void | String, String | send | no | message.level=info, text=message, optional title=title (plan 3.5 E3) |
 | `showErrorDialog` | SERVER | void | String, String | send | no | message.level=error, text=message, optional title=title (plan 3.5 E3) |
-| `showConfirmDialog` | SERVER | boolean | String, String, String, String, boolean | sendAndWait | yes | prompt.kind=confirm, title=title; text/buttons/defaultYes result boolean (E5) |
-| `showOptionDialog` | SERVER | int | String, String, FSkinProp, List, int | syncAndSendAndWait | yes | prompt.kind=option, title=title, options=options; result integer index; icon/defaultOption/text E5 |
-| `showInputDialog` | SERVER | String | String, String, FSkinProp, String, List, boolean | syncAndSendAndWait | yes | prompt.kind=number if isNumeric, otherwise text; title=title, options=inputOptions; result String or null; initialInput/icon/text E5 |
-| `confirm` | SERVER | boolean | CardView, String, boolean, List | syncAndSendAndWait | yes | prompt.kind=confirm, sourceCardId=c, title=question, options=options; result boolean; defaultIsYes E5 |
-| `getChoices` | SERVER | List | String, int, int, List, List, FSerializableFunction | syncAndSendAndWait | yes | prompt.kind=choose, title=message, min=min, max=max, options=choices; selected/display and generic result E5 |
-| `order` | SERVER | OrderResult | String, String, int, int, List, List, CardView, boolean, boolean | syncAndSendAndWait | yes | prompt.kind=order, title=title, min/max=remainingObjectsMin/Max, sourceCardId=referenceCard; source/destination/top/flags and OrderResult E5 |
-| `sideboard` | SERVER | List | CardPool, CardPool, String | syncAndSendAndWait | yes | prompt.kind=sideboard, title=message; main/sideboard pools and PaperCard result E5 |
-| `chooseSingleEntityForEffect` | SERVER | GameEntityView | String, List, DelayedReveal, boolean | syncAndSendAndWait | yes | prompt.kind=chooseEntities, title=title, options=optionList; min=0 if optional else 1, max=1; scalar result and delayedReveal E5 |
-| `chooseEntitiesForEffect` | SERVER | List | String, List, int, int, DelayedReveal | syncAndSendAndWait | yes | prompt.kind=chooseEntities, title=title, options=optionList, min=min, max=max; list result and delayedReveal E5 |
-| `manipulateCardList` | SERVER | List | String, Iterable, Iterable, boolean, boolean, boolean | syncAndSendAndWait | yes | prompt.kind=manipulateList, title=title, options=cards; manipulable/destination flags and ordered result E5 |
+| `showConfirmDialog` | SERVER | boolean | String, String, String, String, boolean | sendAndWait | yes | prompt.kind=confirm; title, text, option labels and default boolean |
+| `showOptionDialog` | SERVER | int | String, String, FSkinProp, List, int | syncAndSendAndWait | yes | prompt.kind=option; title, text, option labels, default index; result integer index (-1 cancels) |
+| `showInputDialog` | SERVER | String | String, String, FSkinProp, String, List, boolean | syncAndSendAndWait | yes | prompt.kind=number or text; title, text, initialInput, option labels; result String or null |
+| `confirm` | SERVER | boolean | CardView, String, boolean, List | syncAndSendAndWait | yes | prompt.kind=confirm; sourceCardId, text, option labels, default boolean |
+| `getChoices` | SERVER | List | String, int, int, List, List, FSerializableFunction | syncAndSendAndWait | yes | prompt.kind=choose; selected optionIds, server-rendered labels, min/max selected; -1/-1 becomes revealOnly with min=max=0 |
+| `order` | SERVER | OrderResult | String, String, int, int, List, List, CardView, boolean, boolean | syncAndSendAndWait | yes | prompt.kind=order; source/destination optionIds, remainingMin/Max, min/max destination count, top, sourceCardId and flags; result {ordered:[optionIds],remember:boolean} |
+| `sideboard` | SERVER | List | CardPool, CardPool, String | syncAndSendAndWait | yes | ignored on wire: server returns unchanged main.toFlatList() and logs (out of v1) |
+| `chooseSingleEntityForEffect` | SERVER | GameEntityView | String, List, DelayedReveal, boolean | syncAndSendAndWait | yes | prompt.kind=chooseEntities; single=true, optional, options, min/max, revealed cards; result [optionId] converts to one GameEntityView or optional null |
+| `chooseEntitiesForEffect` | SERVER | List | String, List, int, int, DelayedReveal | syncAndSendAndWait | yes | prompt.kind=chooseEntities; single=false, options, min/max, revealed cards; result [optionIds] converts to List<GameEntityView> |
+| `manipulateCardList` | SERVER | List | String, Iterable, Iterable, boolean, boolean, boolean | syncAndSendAndWait | yes | prompt.kind=manipulateList; manipulable optionIds, toTop/toBottom/toAnywhere; result permutation of all optionIds |
 | `setCard` | SERVER | void | CardView | syncAndSend | no | ignored: preview card has no named field/message; decided local/ignored in plan 3.5 E10 |
 | `setSelection` | SERVER | void | Selection | syncAndSend | no | state.activeInput.chosen/min/max/targets/selectable (E7 decided task 1.5; mixed references use EntityRef) |
 | `showRevealedCards` | SERVER | void | Iterable | syncAndSend | no | event.kind=reveal, cardIds=filtered cards; temporary visibility from preceding sync |
@@ -208,7 +208,7 @@ All server messages require `seq: integer >= 0`, increasing per seat. Client gam
 | `event` | `kind`: `EventKind`; `stateSeq`: `Sequence`; `cardIds?`: array of `CardRef`; `playerIds?`: array of `PlayerRef`; `from?`: `ZoneRef` or null; `to?`: `ZoneRef` or null; `amount?`: `Int32`; `result?`: JSON value (unresolved; see $comment) | applyDelta.events / handleGameEvents and showRevealedCards; source table below |
 | `log` | `text`: string; `entryType`: `GameLogEntryType` | GameEventAddLog.message via GameLog/GameLogEntry, PayloadFilter |
 | `logTail` | `entries`: array of `LogEntry` ({text: string, entryType: GameLogEntryType, seq: Sequence}) | Last 200 filtered log entries on reconnect/resync; no separate Forge call |
-| `prompt` | `requestId`: `RequestId`; `kind`: `PromptKind`; `title?`: string; `options?`: array of `PromptOption`; `min?`: `Int32`; `max?`: `Int32`; `sourceCardId?`: `CardRef` or null | All 13 blocking SERVER entries in A; helper table below |
+| `prompt` | `requestId`: RequestId; `kind`: PromptKind; `title`: string; `options`: PromptOption[]; `min`, `max`: nonnegative integer; `default`: PromptResult; `sourceCardId?`: CardRef; kind-specific fields below | 12 blocking SERVER methods; sideboard answered locally |
 | `promptCancel` | `requestId`: `RequestId` | New pending-request lifecycle; no ProtocolMethod equivalent |
 | `message` | `level`: enum `"info"`, `"warning"`, `"error"`, `"rejected"`; `text`: string; `title?`: string | message, showErrorDialog, flashIncorrectAction; ActionRouter stale-action rejection |
 | `macroState` | `recording`: boolean; `replaying`: boolean; `hasActions`: boolean | applyMacroState(IMacroSystem.State) |
@@ -258,24 +258,28 @@ Section 2.5 is more precise than the compressed 3.2 table: undeclareAttacker nee
 
 ### Blocking prompts and results
 
-All prompt kinds share requestId, kind, optional title/options/min/max/sourceCardId as applicable. Negative min/max values are valid source sentinels (reveal uses -1/-1); order bounds count objects remaining, not necessarily selected. A prompt kind does not yet fully determine a JSON result codec (E5). Generic Java values/functions are never serialized verbatim.
+All wire prompts require type, seq, requestId, kind, title, options, min, max and default. sourceCardId is optional. Each option has a prompt-scoped integer optionId (0..n-1) and server-rendered label. Card options additionally carry cardRef and available name/set/num. Under plan 3.5 E5 as corrected for task 1.6, the owner-only prompt reveals offered face-up cards even from libraries or other players' hands. Face-down cards retain the seat's normal CardVisibility permissions: if identity is hidden, the option has label "Face-down card", an opaque cardRef, and no name/set/num. Its alternate state and custom identity formatter are not read. The same rule applies to delayed-reveal metadata. An existing IdMapper ref is reused; otherwise a random prompt-only opaque ref is allocated without granting general action access. getChoices' display function is applied on the Forge caller, never serialized or invoked on I/O. Non-card objects (including CostPart) stay in the server's option table. Desktop icon objects and trigger-event objects are presentation context, not wire objects.
 
-| Kind | Forge producer | Source payload and source return type |
+| Kind | Extra JSON context | promptReply.result and Forge return |
 |---|---|---|
-| choose | getChoices; local one/oneOrNone/getInteger/reveal/many/insertInList delegates | choices/selected are List<T>, display is a server-side formatting function; result List<T> |
-| chooseEntities | chooseSingleEntityForEffect, chooseEntitiesForEffect | entity options, optional flag or min/max, DelayedReveal; single GameEntityView (nullable if optional) versus List<GameEntityView> must remain distinguishable |
-| order | order | source and destination List<T>, remaining bounds, reference card, top text, sideboardingMode, showRememberCheckbox; OrderResult<T> = ordered List<T> plus rememberDecision boolean |
-| confirm | confirm, showConfirmDialog | question/message, options or yes/no labels and default boolean; result boolean |
-| option | showOptionDialog | message/title/icon, String options, defaultOption int; result int index (including cancellation conventions to resolve) |
-| number | showInputDialog with isNumeric=true | initialInput and inputOptions are strings; return String or null, not a Java Number |
-| text | showInputDialog with isNumeric=false | same String payload and String/null result |
-| assignCombatDamage | assignCombatDamage | attacker, blockers, damage int, defender, overrideOrder/maySkip booleans; result Map<CardView,Integer> |
-| assignGeneric | assignGenericAmount | effectSource, Map<Object,Integer> targets, amount int, atLeastOne boolean, amountLabel String; result Map<Object,Integer>; keys may be GameEntityView or mana-color Byte |
-| manipulateList | manipulateCardList | cards/manipulable iterables, toTop/toBottom/toAnywhere booleans; result List<CardView> |
-| chooseAbility | getAbilityToPlay | source card and options [{abilityId: integer,text: string}]; promptReply.result is abilityId, converted to the offered SpellAbilityView |
-| sideboard | sideboard | two CardPools and message; result List<PaperCard>, not CardView ids |
+| choose | selected: optionId[], revealOnly: boolean | unique optionId[] within min..max -> List<T>; reveal -1/-1 becomes min=max=0, result [] |
+| chooseEntities | single: boolean, optional?: boolean, revealed?: card metadata[], revealMessage?: string | unique optionId[] -> one GameEntityView (null only for allowed empty selection) or List<GameEntityView> |
+| order | source/destination: optionId[], remainingMin/remainingMax: integer, top: string, sideboardingMode/rememberAllowed: boolean | {ordered: unique optionId[], remember: boolean} -> OrderResult(ordered, rememberDecision) |
+| confirm | text: string, option labels, default: boolean | boolean |
+| option | text: string, option labels, default: integer | integer index in options, or -1 for cancellation |
+| number / text | text: string, initialInput: string or null, restrictedInput: boolean and optional input-options labels | string or null (when restricted, one of those offered values); number accepts an integer string, never a JSON number |
+| assignCombatDamage | amount: integer, lethal: integer[], overrideOrder/divideDamage/maySkip: boolean, defenderOptionId?: integer | [{optionId,amount}] -> Map<CardView,Integer>; amounts sum to damage, lethal before later recipients unless permitted; defender uses a null map key; null only when maySkip |
+| assignGeneric | amount: integer, capacities: integer[], atLeastOne: boolean | [{optionId,amount}] -> Map<Object,Integer>; sum, capacities and atLeastOne per target enforced |
+| manipulateList | manipulable: optionId[], toTop/toBottom/toAnywhere: boolean | permutation of all optionIds -> List<CardView>; fixed relative order and movement restrictions enforced |
+| chooseAbility | sourceCardId, offered ability labels | one optionId -> the exact offered SpellAbilityView (not an abilityId action) |
 
-`promptReply` is validated against its pending prompt, not only against the envelope schema. The future is completed on the Netty I/O thread without locks; it never joins the action queue. A reply for a cancelled request is ignored and logged. A disconnect retains pending futures; reconnect resends the same requestId. Host abandonment resolves legal defaults before posting controller handoff/concede to the EDT, per plan 2.2.
+Sideboard never goes on the wire: its local result is the unchanged main CardPool.toFlatList(), matching PlayerControllerHuman.sideboard's no-change semantics.
+
+**Order destination rule verified in source:** DualListBox.getOrderedList (forge-gui-desktop/src/main/java/forge/gui/DualListBox.java) returns the destination list; its min/max constrain the number remaining in the source. The wire min/max instead describe the returned destination count: total - remainingMax through total - remainingMin. Initial source and destination together form the option table; initial destination entries may move back. PlayerControllerHuman's orderBlockers/orderAttackers/orderCosts, scry/surveil and orderMoveToZoneList require a full permutation (remaining 0/0). Exert/enlist allow subsets. Replacement effects use a prepopulated destination and require at least one result. Simultaneous abilities may arrive wholly in either list and optionally remember the order. orderCosts supplies CostPart objects. Library movement reverses iteration after the GUI choice so the first returned card remains nearest the destination end.
+
+Defaults are decoded through the same validator as replies: first min choices, first single entity, default confirm/index, null cancelled text, unchanged manipulation, first ability, lethal damage then the last blocker/defender, and first generic recipient subject to capacity/atLeastOne constraints. A null order destination preserves source order (subject to legal destination size); a supplied destination uses the smallest legal selection, retaining its entries first. No default returns null for order, choose, or allocations.
+
+A reply's requestId selects the stored kind and option table; the schema accepts the union of per-kind result shapes, and PromptCodec enforces the correlated type and semantic constraints. Invalid replies send message.level=rejected and leave the same future pending. Unknown/finished IDs are ignored and logged. Completion runs directly on Netty I/O, without joining the action queue. Disconnect retains futures without timeout. Reconnect sends hello, cached state, then pending prompts with their original envelopes/requestIds; replayed sequence numbers identify old messages, not newly produced deltas. All normal messages still pass through SeatWriter ordering. Host abandonment consumes these legal defaults in task 1.14.
 
 ### Yield tagged union
 
@@ -408,7 +412,7 @@ A snapshot is built only inside Forge-safe setGameView or object-bearing applyDe
 
 ## E. Gaps and questions for Will
 
-The original task 1.1 questions are retained below, followed by their plan 3.5 decisions or defaults. E4, E10 and E12 are decided; E8 is decided in task 1.2 and E7 in task 1.5. The other items use defaults and are finished in the named tasks; E5, E6, E9 and E11 retain their current schema shapes until then.
+The original task 1.1 questions are retained below, followed by their plan 3.5 decisions or defaults. E4, E10 and E12 are decided; E8 is decided in task 1.2, E7 in task 1.5 and E5 in task 1.6. The other items use defaults and are finished in the named tasks; E6, E9 and E11 retain their current schema shapes until then.
 
 - **E1.** Will, what server message and correlation fields should carry the String returned by describeAbility/getActivateDescription? Section 3.2 promises a tooltip reply but 3.1 names none.
 
@@ -436,9 +440,9 @@ The original task 1.1 questions are retained below, followed by their plan 3.5 d
 
 - **E5.** Will, what are the complete option and reply encodings for each prompt kind, including generic values, single versus multiple entities, nullable/cancel results, OrderResult.rememberDecision, card/byte allocation maps, sideboard PaperCards, initial/default/selected values, icons, delayed reveals, damage/defender/amount context and manipulation flags? Should numeric-dialog replies remain String/null as Forge requires, and how are prompt-bound choice ids scoped?
 
-  Default (plan 3.5): Every prompt option gets a prompt-scoped integer `optionId`; `promptReply` sends option ids (or a number, or text) and the server converts back to Forge's types. Finished in task 1.6.
+  Decision (plan 3.5 E5, corrected in task 1.6): Prompt-scoped optionIds and owner-only reveals apply to offered face-up cards. Face-down identities are included only when CardVisibility.forSeat permits them; otherwise use "Face-down card" with an opaque ref and no identity metadata. Exact server object conversion, per-kind validation/defaults, and local no-change sideboard are implemented; see section D.
 
-  Status: default, finished in task 1.6
+  Status: decided (task 1.6)
 
 - **E6.** Will, how should Unity obtain the full-card versus ability-suffix storage keys used by setYield, and how should yieldState preserve player identity and SetMarker.atOrPastAtClick when mirroring Forge? What JSON encoding should YieldStateSnapshot.skipPhases use, and are the copied public seed-record field names the intended wire names?
 

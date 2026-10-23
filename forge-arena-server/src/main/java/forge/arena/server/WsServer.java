@@ -2,6 +2,8 @@ package forge.arena.server;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
@@ -113,6 +115,7 @@ public final class WsServer implements AutoCloseable {
     }
 
     private final class MessageHandler extends SimpleChannelInboundHandler<TextWebSocketFrame> {
+        private int seat = -1;
         @Override
         public void userEventTriggered(final ChannelHandlerContext ctx, final Object event) throws Exception {
             if (event instanceof WebSocketServerProtocolHandler.HandshakeComplete handshake) {
@@ -125,7 +128,8 @@ public final class WsServer implements AutoCloseable {
                     }
                     // No bridge lock or wait on I/O: the seat writer serializes hello, cached
                     // state, replacement and live sends, so handshake races cannot reorder them.
-                    writer(Integer.parseInt(seats.get(0))).connect(ctx.channel());
+                    seat = Integer.parseInt(seats.get(0));
+                    writer(seat).connect(ctx.channel());
                 } catch (final IllegalArgumentException ex) {
                     ctx.writeAndFlush(new CloseWebSocketFrame(1008, "Invalid seat: use /ws?seat=N, N=0..3"))
                             .addListener(ChannelFutureListener.CLOSE);
@@ -137,6 +141,17 @@ public final class WsServer implements AutoCloseable {
         @Override
         protected void channelRead0(final ChannelHandlerContext ctx, final TextWebSocketFrame frame) {
             System.out.println("[ws] in: " + frame.text());
+            if (seat < 0) return;
+            try {
+                final JsonObject message = JsonParser.parseString(frame.text()).getAsJsonObject();
+                if (message.has("type") && "promptReply".equals(message.get("type").getAsString())) {
+                    writer(seat).promptReply(message);
+                }
+            } catch (RuntimeException ex) {
+                final JsonObject rejected = new JsonObject();
+                rejected.addProperty("type", "message"); rejected.addProperty("level", "rejected");
+                rejected.addProperty("text", "Invalid JSON message"); writer(seat).sendFromIo(rejected);
+            }
         }
 
         @Override
