@@ -78,4 +78,28 @@ public class IdMapperTest {
             assertFalse(a.resolve(invalid).isPresent(), "Invalid reference rejected: " + invalid);
         }
     }
+
+    @Test
+    public void currentRefOnlyReadsCompletedSnapshots() {
+        final IdMapper ids = new IdMapper();
+        assertTrue(ids.currentRef(12345).isEmpty());
+        ids.beginSnapshot();
+        ids.wireRef(12345, "Battlefield", false, true);
+        assertTrue(ids.currentRef(12345).isEmpty());
+        ids.endSnapshot();
+        assertEquals(ids.currentRef(12345).orElseThrow(), Integer.valueOf(12345));
+        ids.beginSnapshot();
+        final Object hidden = ids.wireRef(12345, "Hand", false, false);
+        assertEquals(ids.currentRef(12345).orElseThrow(), Integer.valueOf(12345));
+        ids.endSnapshot();
+        assertEquals(ids.currentRef(12345).orElseThrow(), hidden);
+        ids.beginSnapshot();
+        ids.wireRef(12345, "Battlefield", false, true);
+        ids.abortSnapshot();
+        assertEquals(ids.currentRef(12345).orElseThrow(), hidden);
+        ids.beginSnapshot();
+        assertEquals(ids.currentRef(12345).orElseThrow(), hidden);
+        ids.endSnapshot();
+        assertTrue(ids.currentRef(12345).isEmpty(), "Vanished cards have no payload reference");
+    }
 }

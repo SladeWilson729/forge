@@ -31,6 +31,8 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertTrue;
@@ -38,7 +40,7 @@ import static org.testng.Assert.assertTrue;
 /** AITest's public setup/createCard/addCardToZone pattern, copied without a test-module dependency. */
 final class ScenarioGame {
     static final Gson JSON = new GsonBuilder().disableHtmlEscaping().serializeNulls().create();
-    private static JsonSchema stateSchema;
+    private static final Map<String, JsonSchema> SCHEMAS = new HashMap<>();
     final Game game;
     final IdMapper[] ids = {new IdMapper(), new IdMapper(), new IdMapper(), new IdMapper()};
     private final SeatViewSerializer serializer = new SeatViewSerializer();
@@ -46,6 +48,9 @@ final class ScenarioGame {
     private int printing;
 
     static void initialize() {
+        if (!SCHEMAS.isEmpty()) {
+            return;
+        }
         // ArenaServerMain.initializeForge is package-private. Copy its public headless boot calls.
         // Like AITest, initialize outside any timed test so interruption cannot corrupt the card DB.
         GuiBase.setInterface(new HeadlessGui());
@@ -55,9 +60,16 @@ final class ScenarioGame {
             preferences.setPref(FPref.UI_RECORD_REPLAYS, false);
             return null;
         });
-        stateSchema = JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012).getSchema(
-                SchemaLocation.of(Path.of("../protocol/schema.json").toAbsolutePath().normalize().toUri()
-                        + "#/$defs/state"));
+        for (final String definition : List.of("state", "event", "log")) {
+            SCHEMAS.put(definition, JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012).getSchema(
+                    SchemaLocation.of(Path.of("../protocol/schema.json").toAbsolutePath().normalize().toUri()
+                            + "#/$defs/" + definition)));
+        }
+    }
+
+    static void validate(final JsonObject payload, final String definition) {
+        final var errors = SCHEMAS.get(definition).validate(JSON.toJson(payload), InputFormat.JSON);
+        assertTrue(errors.isEmpty(), definition + " schema errors: " + errors);
     }
 
     ScenarioGame() {
@@ -110,8 +122,7 @@ final class ScenarioGame {
         final long sequence = ++seq;
         for (int seat = 0; seat < 4; seat++) {
             result[seat] = serializer.buildState(game, player(seat).getView(), ids[seat], sequence);
-            final var errors = stateSchema.validate(JSON.toJson(result[seat]), InputFormat.JSON);
-            assertTrue(errors.isEmpty(), "Seat " + seat + " schema errors: " + errors);
+            validate(result[seat], "state");
         }
         return result;
     }

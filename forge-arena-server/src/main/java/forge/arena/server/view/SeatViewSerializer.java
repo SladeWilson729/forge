@@ -149,14 +149,12 @@ public final class SeatViewSerializer {
 
         private CardInfo cardInfo(final CardView card) {
             return cards.computeIfAbsent(card.getId(), ignored -> {
-                final boolean shown = card.canBeShownTo(seat);
-                final boolean down = card.isFaceDown();
-                // Both predicates already honor mayPlayerLook. Decide once for every reference.
-                final boolean identity = shown && (!down || card.canFaceDownBeShownTo(seat));
+                final CardVisibility visibility = CardVisibility.forSeat(card, seat);
                 final ZoneType zone = card.getZone();
                 // Evaluate all Forge getters before entering the mapper's leaf lock.
-                final Object ref = ids.wireRef(card.getId(), zone == null ? null : zone.name(), down, identity);
-                return new CardInfo(card, shown, identity, down,
+                final Object ref = ids.wireRef(card.getId(), zone == null ? null : zone.name(),
+                        visibility.faceDown(), visibility.identityVisible());
+                return new CardInfo(card, visibility.shown(), visibility.identityVisible(), visibility.faceDown(),
                         ref instanceof Integer id ? new JsonPrimitive(id) : new JsonPrimitive((String) ref));
             });
         }

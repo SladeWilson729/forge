@@ -12,7 +12,8 @@ import org.testng.annotations.Test;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
-import java.util.regex.Pattern;
+
+import static forge.arena.server.view.HiddenInfoAssertions.noIdentity;
 
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
@@ -43,18 +44,6 @@ public class HiddenInfoSnapshotTest {
             }
         }
         throw new AssertionError("Missing mapped card " + card.getId() + " for seat " + seat + " in " + zone);
-    }
-
-    private static void noIdentity(final JsonObject state, final Card card) {
-        final String json = ScenarioGame.JSON.toJson(state);
-        final var paper = card.getPaperCard();
-        assertNotNull(paper);
-        for (final String secret : List.of(paper.getName(), paper.getEdition(), paper.getCollectorNumber())) {
-            assertFalse(secret.isBlank(), "Leak scan must have a meaningful sentinel");
-            assertFalse(json.contains(secret), "Hidden identity leaked: " + secret + " in " + json);
-        }
-        assertFalse(Pattern.compile("\"id\":" + card.getId() + "(?=[,}])").matcher(json).find(),
-                "Hidden real id leaked: " + card.getId());
     }
 
     private static void visible(final JsonObject object, final Card card) {

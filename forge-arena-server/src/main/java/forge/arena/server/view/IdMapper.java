@@ -6,6 +6,7 @@ import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Set;
 
@@ -86,6 +87,12 @@ public final class IdMapper {
     /** A failed Forge walk must not publish a partial visibility/reverse map (plan rule 1). */
     public synchronized void abortSnapshot() {
         pending = null;
+    }
+
+    /** Read-only reference from the latest completed snapshot, never from an in-progress walk. */
+    public synchronized Optional<Object> currentRef(final int realId) {
+        final Entry entry = current.get(realId);
+        return entry == null ? Optional.empty() : Optional.of(entry.ref());
     }
 
     public synchronized OptionalInt resolve(final Object wireRef) {
