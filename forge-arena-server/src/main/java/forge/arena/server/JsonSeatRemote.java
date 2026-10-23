@@ -5,27 +5,56 @@ import forge.arena.server.view.IdMapper;
 import forge.arena.server.view.SeatViewSerializer;
 import forge.game.Game;
 import forge.game.player.PlayerView;
+import forge.gamemodes.match.HostedMatch;
 import forge.gamemodes.net.DeltaPacket;
 import forge.gamemodes.net.IRemote;
 import forge.gamemodes.net.event.GuiGameEvent;
 import forge.gamemodes.net.event.IdentifiableNetEvent;
 import forge.gamemodes.net.event.NetEvent;
 
+import java.util.Objects;
+import java.util.concurrent.atomic.AtomicLong;
+
 /** Synchronous Forge-to-JSON boundary. Only SeatWriter does socket work. */
 public final class JsonSeatRemote implements IRemote {
     private static final System.Logger LOG = System.getLogger(JsonSeatRemote.class.getName());
-    private final Game game;
-    private final PlayerView seat;
+    @FunctionalInterface
+    public interface PromptResponder {
+        Object answer(GuiGameEvent event);
+    }
+
+    private Game game;
+    private PlayerView seat;
+    private final HostedMatch match;
+    private final int seatIndex;
     private final IdMapper ids = new IdMapper();
     private final SeatViewSerializer serializer = new SeatViewSerializer();
     private final SeatWriter writer;
     private volatile boolean dirty;
     private volatile long lastStateSequence;
+    private volatile JsonObject latestState;
+    private final AtomicLong displayCalls = new AtomicLong();
+    private PromptResponder promptResponder = event -> {
+        LOG.log(System.Logger.Level.ERROR, "Unexpected blocking seat-view call: {0}", event.getMethod());
+        return null; // Task 1.6 supplies the real prompt future.
+    };
 
     public JsonSeatRemote(final Game game, final PlayerView seat, final SeatWriter writer) {
         this.game = game;
         this.seat = seat;
         this.writer = writer;
+        this.match = null;
+        this.seatIndex = -1;
+    }
+
+    public JsonSeatRemote(final HostedMatch match, final int seatIndex, final SeatWriter writer) {
+        this.match = Objects.requireNonNull(match);
+        this.seatIndex = seatIndex;
+        this.writer = writer;
+    }
+
+    public void setPromptResponder(final PromptResponder responder) {
+        promptResponder = Objects.requireNonNull(responder);
     }
 
     @Override
@@ -36,6 +65,7 @@ public final class JsonSeatRemote implements IRemote {
         }
         final Object[] args = gui.getObjects();
         switch (gui.getMethod()) {
+            case setSelection, updateButtons, showPromptMessage -> displayCalls.incrementAndGet();
             case setGameView -> snapshot();
             case applyDelta -> {
                 final DeltaPacket delta = (DeltaPacket) args[0];
@@ -60,19 +90,28 @@ public final class JsonSeatRemote implements IRemote {
                 message.addProperty("type", "attention");
                 writer.send(message);
             }
-            default -> LOG.log(System.Logger.Level.DEBUG, "Seat {0}: {1}", seat.getId(), gui.getMethod());
+            default -> LOG.log(System.Logger.Level.DEBUG, "Seat {0}: {1}",
+                    seat == null ? seatIndex : seat.getId(), gui.getMethod());
         }
     }
 
     private void snapshot() {
         try {
+            if (game == null) {
+                game = Objects.requireNonNull(match.getGame());
+                seat = game.getPlayers().get(seatIndex).getView();
+            }
             // Inline, on Forge's safe caller (plan 2.2 rule 1). Serializer owns the shared
             // CardVisibility/IdMapper policy; never reconstruct visibility in the transport.
-            lastStateSequence = writer.send(serializer.buildState(game, seat, ids, 0));
+            final JsonObject state = serializer.buildState(game, seat, ids, 0);
+            final long seq = writer.send(state);
+            latestState = state;
+            lastStateSequence = seq;
             dirty = false;
         } catch (final RuntimeException | Error ex) {
             dirty = true;
-            LOG.log(System.Logger.Level.ERROR, "Seat " + seat.getId() + " snapshot failed; retrying on next object delta", ex);
+            LOG.log(System.Logger.Level.ERROR, "Seat " + (seat == null ? seatIndex : seat.getId())
+                    + " snapshot failed; retrying on next object delta", ex);
         }
     }
 
@@ -84,10 +123,26 @@ public final class JsonSeatRemote implements IRemote {
         return lastStateSequence;
     }
 
+    // Test probes only: detached JSON and bookkeeping, never a live Forge graph.
+    JsonObject getLatestState() {
+        final JsonObject state = latestState;
+        return state == null ? null : state.deepCopy();
+    }
+
+    IdMapper getIds() {
+        return ids;
+    }
+
+    long getDisplayCallCount() {
+        return displayCalls.get();
+    }
+
     @Override
     public Object sendAndWait(final IdentifiableNetEvent event) {
-        LOG.log(System.Logger.Level.ERROR, "Unexpected blocking seat-view call: {0}",
-                event instanceof GuiGameEvent gui ? gui.getMethod() : event.getClass().getSimpleName());
-        return null; // Prompt codec arrives in task 1.6; these watchers never control an AI.
+        if (event instanceof GuiGameEvent gui) {
+            return promptResponder.answer(gui);
+        }
+        LOG.log(System.Logger.Level.ERROR, "Unexpected blocking seat-view call: {0}", event.getClass().getSimpleName());
+        return null;
     }
 }
