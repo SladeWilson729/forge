@@ -209,10 +209,19 @@ public class SeatStreamTest {
                                     final JsonSchema schema, final long until) {
         assertNull(client.error);
         long previous = -1;
+        assertEquals(client.history().get(0).object().get("type").getAsString(), "hello");
+        assertEquals(client.history().get(1).object().get("type").getAsString(), "logTail");
+        final JsonObject tail = client.history().get(1).object();
+        final JsonObject firstState = client.history().stream().map(WsTestClient.Received::object)
+                .filter(m -> "state".equals(m.get("type").getAsString())).findFirst().orElseThrow();
+        for (var entry : tail.getAsJsonArray("entries")) {
+            assertTrue(entry.getAsJsonObject().get("seq").getAsLong() <= firstState.get("seq").getAsLong());
+        }
         final List<Long> times = new ArrayList<>();
         for (final WsTestClient.Received received : client.history()) {
             final JsonObject message = received.object();
-            if ("hello".equals(message.get("type").getAsString())) {
+            if ("hello".equals(message.get("type").getAsString()) || "logTail".equals(message.get("type").getAsString())) {
+                assertEquals(message.get("seq").getAsLong(), 0L);
                 continue;
             }
             final long seq = message.get("seq").getAsLong();

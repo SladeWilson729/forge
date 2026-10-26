@@ -205,7 +205,7 @@ All server messages require `seq: integer >= 0`, increasing per seat. Client gam
 | `lobby` | `seats?`: array of JSON value (unresolved; see $comment) | New Lobby; no ProtocolMethod |
 | `deckResult` | `ok`: boolean; `errors`: array of string | New DeckImport; no ProtocolMethod |
 | `state` | `turn`: `Int32`; `activePlayerId`: `PlayerRef` or null; `priorityPlayerId`: `PlayerRef` or null; `phase`: `PhaseType` or null; `monarchId`: `PlayerRef` or null; `initiativeId`: `PlayerRef` or null; `players`: array of `Player`; `stack`: array of `StackItem`; `activeInput`: `ActiveInput` | setGameView and applyDelta with objects; display calls update activeInput |
-| `event` | `kind`: `EventKind`; `stateSeq`: `Sequence`; `cardIds?`: array of `CardRef`; `playerIds?`: array of `PlayerRef`; `from?`: `ZoneRef` or null; `to?`: `ZoneRef` or null; `amount?`: `Int32`; `result?`: JSON value (unresolved; see $comment) | applyDelta.events / handleGameEvents and showRevealedCards; source table below |
+| `event` | `kind`: `EventKind`; `stateSeq`: `Sequence`; `cardIds?`: array of `CardRef`; `playerIds?`: array of `PlayerRef`; `from?`: `ZoneRef` or null; `to?`: `ZoneRef` or null; `amount?`: `Int32`; `result?`: kind-specific boolean/integer/planar enum; `cardStubs?`: array of `Card`; remaining fields are defined per kind below | applyDelta.events / handleGameEvents and showRevealedCards; source table below |
 | `log` | `text`: string; `entryType`: `GameLogEntryType` | GameEventAddLog.message via GameLog/GameLogEntry, PayloadFilter |
 | `logTail` | `entries`: array of `LogEntry` ({text: string, entryType: GameLogEntryType, seq: Sequence}) | Last 200 filtered log entries on reconnect/resync; no separate Forge call |
 | `prompt` | `requestId`: RequestId; `kind`: PromptKind; `title`: string; `options`: PromptOption[]; `min`, `max`: nonnegative integer; `default`: PromptResult; `sourceCardId?`: CardRef; kind-specific fields below | 12 blocking SERVER methods; sideboard answered locally |
@@ -390,7 +390,7 @@ The complete getter inventory, return types, source lines and visibility rules a
 
 ### Event kinds and sources
 
-All source records below are in forge-game/src/main/java/forge/game/event; events arrive through applyDelta/handleGameEvents except the explicitly listed protocol/snapshot paths. Kind-specific payload layout remains task 1.8 (E9).
+All source records below are in forge-game/src/main/java/forge/game/event; events arrive through applyDelta/handleGameEvents except the explicitly listed protocol/snapshot paths. Task 1.8 defines the payloads below (E9).
 
 | kind | Verified source and relevant fields |
 |---|---|
@@ -402,7 +402,7 @@ All source records below are in forge-game/src/main/java/forge/game/event; event
 | tap / untap | GameEventCardTapped(card, tapped) |
 | damage | GameEventCardDamaged(card, source, amount, type); GameEventPlayerDamaged(target, source, amount, combat, infect) |
 | counterChange | GameEventCardCounters(card, type, oldValue, newValue); GameEventPlayerCounters(receiver, type, oldValue, amount) |
-| tokenCreated | GameEventTokenCreated has no fields; pair with subsequent zone changes in the batch for ids |
+| tokenCreated | GameEventTokenCreated has no fields; TokenEffect emits it after its zone changes; correlate within the same batch |
 | attack | GameEventAttackersDeclared(player, attackersMap) |
 | block | GameEventBlockersDeclared(defendingPlayer, blockers) |
 | shuffle | GameEventShuffle(player) |
@@ -417,11 +417,56 @@ All source records below are in forge-game/src/main/java/forge/game/event; event
 | playerEliminated | PlayerView.getHasLost change |
 | gameOver | GameEventGameOutcome(lastTurnNumber, outcomeStrings, winningPlayerName, matchSummary) |
 
-A snapshot is built only inside Forge-safe setGameView or object-bearing applyDelta delivery, including the updateGameView emitted before highlight sends. Events-only deltas never cause an off-thread graph walk. Only finished JSON crosses to SeatWriter. States coalesce (10/s maximum), events/prompts/logs retain order; an event carries stateSeq and its prerequisite state must be sent first. Netty I/O threads never wait or take locks; all actions run in order on the common EDT. Bridge leaf locks are never held across Forge calls, another seat lock, or future waits. Stale actions are rejected only when they no longer apply, using message level rejected and a reason; resync sends cached JSON immediately and schedules a safe rebuild with setResyncPending.
+Every event has `type: "event"`, `seq: Sequence`, `stateSeq: Sequence`, and `kind`. Card references below are seat-mapped; an unavailable/retired reference is omitted from arrays or represented as null in nullable scalar fields. No event uses a raw card id as a fallback. `cardStubs` contains minimal schema-valid VisibleCard, FaceDownCard or HiddenCard objects captured in the event's own snapshot; identity gating is identical to the snapshot. Stubs do not carry nested references.
+
+| Kind | Payload beyond the envelope and cardStubs |
+|---|---|
+| zoneChange | `cardIds: CardRef[]`, `from/to: ZoneRef or null` (`{player, zoneType}`); library-to-library changes always have empty cardIds |
+| landPlayed | `cardIds: CardRef[]`, `playerIds: PlayerRef[]` |
+| spellCast | `cardIds: CardRef[]`, `ability: boolean`; `stackId: Int32` and `playerIds: PlayerRef[]` when a stack instance exists |
+| resolved | `cardIds: CardRef[]` |
+| countered | `cardIds: CardRef[]`, `reason: "fizzled" or "removed"` |
+| tap / untap | `cardIds: CardRef[]` |
+| damage | `sourceCardId: CardRef or null`, `target: EntityRef or null`, `amount: Int32`; card damage adds `damageType: Normal/M1M1Counters/Deathtouch/LoyaltyLoss`; player damage adds `combat/infect: boolean` |
+| counterChange | `target: EntityRef or null`, `counterType: string or null`, `oldValue/newValue: Int32`; null type is a bulk clear/replacement |
+| tokenCreated | `cardIds: CardRef[]` from token zone changes since the preceding marker; if absent, use following changes before the next marker. Each zone change is assigned once. TokenEffect.java:130-138 emits the marker last; marker-first batches are also supported |
+| attack | `playerIds: PlayerRef[]`, `attacks: [{cardId: CardRef, defender: EntityRef or null}]` |
+| block | `playerIds: PlayerRef[]`, `blocks: [{attackerId: CardRef, blockerId: CardRef}]`; Forge's attacker-to-itself sentinel means unblocked and is excluded |
+| shuffle | `playerIds: PlayerRef[]`; no card ids |
+| coinFlip | `playerIds: PlayerRef[]`, `result: boolean` (true=heads), `startingToss: boolean` |
+| dieRoll | `sides: nonnegative integer`, `result: nonnegative integer or "Planeswalk"/"Chaos"/"Blank"`; the legacy no-argument event has 0/0; planar results have six sides |
+| mulligan | `playerIds: PlayerRef[]` |
+| turnBegan | `playerIds: PlayerRef[]`, `turn: Int32` |
+| reveal | `cardIds: CardRef[]`, plus the receiving seat's revealed card stubs |
+| lifeChange | `playerIds: PlayerRef[]`, `oldValue/newValue/amount: Int32`; amount is the signed difference |
+| triggerFired | `cardIds: CardRef[]`, `stackId: Int32` from a newly present StackItemView with isTrigger=true |
+| monarchChange / initiativeChange | `previousPlayerId/playerId: PlayerRef or null` |
+| playerEliminated | `playerIds: PlayerRef[]`; newly lost or removed from the player snapshot |
+| gameOver | `winner: string or null`, `turn: Int32`; null denotes no winning player |
+
+Source caveats: GameEventPlayerCounters.amount is the **new total**, despite its name and toString (Player.setCounters, Player.java:929). Normal resolutions are correlated with removals by SpellAbilityView id, both across batches and within a batch; a null removal means clearing the stack. GameEventBlockersDeclared can contain attacker->attacker for an unblocked creature (PhaseHandler.java:740). No additional kind is inferred for plural GameEventRollDice or events absent from plan 3.1a.
+
+**Reveal scope.** Optional `StateSnapshot.revealed: Card[]` appears only on the seat receiving showRevealedCards. Library contents otherwise remain count-only. Extra ids are reveal-scoped in IdMapper and expire on hideRevealedCards, game over, or replacement connection; normal snapshot refs remain governed by normal visibility. The GUI call is Forge's grant, normally accompanied by tempShowCards/mayPlayerLook. Any disagreement with CardVisibility is logged (seat/card/zone) and reported; the encoder retains the filtered variant, never silently reveals a forbidden face. updateRevealedCards is match reveal history and remains out of v1. The current state's revealed field controls the pane; a delayed reveal animation event must not reopen a pane cleared by a newer state.
+
+**Ordering and coalescing (task 1.8 clarification).** The writer holds only one pending state. Before an event whose stateSeq exceeds the last sent state, it waits for the 10/s budget and sends the pending state first. Every referenced card is either in a previously sent state or has an inline seat-filtered cardStub in that event; stubs are included proactively. There are no snapshot barriers. For an ongoing connection, events/logs/prompts retain FIFO order and are never coalesced or dropped. If a newer state overtakes their allocated envelope sequences, the writer reassigns those queued envelopes increasing seq values above that state before accepting more messages. State seq, event stateSeq and prompt requestId are unchanged. Thus normal live delivery remains strictly increasing; preambles and pending-prompt replays are the exceptions. Cached replay also respects the 10/s state cap.
+
+**Logs and messages.** GameEventAddLog supplies text, entryType and optional source-card provenance. PayloadFilter redacts hidden-source entries even when a public namesake exists; for entries without provenance it checks hidden names against visible names, excluding libraries. The visibility index is captured on the full snapshot's Forge-safe caller, so event-only packets never scan live cards. The writer retains up to 200 filtered log entries, including covered offline logs; logTail is the preamble described below. Entries retain their delivered sequence (or their original allocated sequence if covered before delivery). message.level remains info/warning/error/rejected; message/showErrorDialog supply info/error and optional titles, flashIncorrectAction supplies rejected with generic text, and ActionRouter supplies its own rejection reason.
+
+**Connection handshake (first connection and replacement, plan 2.2 clarification).** In this exact order:
+
+1. `hello`, top-level `seq: 0`, the connection preamble.
+2. `logTail`, top-level `seq: 0`, including only entries with their original `seq <= cachedState.seq`; empty when no cached state exists.
+3. The latest cached state, if any, with its original seq. The single pending state participates in choosing the latest cache.
+4. Queued messages strictly newer than that cached state, in increasing seq order. The covered prefix (seq at or below the cache) is dropped **for this connection**; its logs are represented in logTail. Pending prompts are still replayed with their original requestIds even when their envelope seq is covered, and their queued duplicates are removed.
+
+Hello/logTail are excluded from increasing-sequence checks; pending prompts are keyed by requestId. Resync uses the same logTail/cache/pending-prompt replay without a new hello. Replacement clears per-seat revealed refs and removes revealed from the cache before replay. These handshake rules supersede retaining the old offline prefix: they do not authorize dropping events during an ongoing connection.
+
+A snapshot is built only inside Forge-safe setGameView or object-bearing applyDelta delivery. Snapshot-diff events are computed there; events-only packets do not trigger graph walks. Only detached JSON crosses to SeatWriter. I/O never waits for Forge. Leaf locks never hold Forge calls or prompt waits.
+
 
 ## E. Gaps and questions for Will
 
-The original task 1.1 questions are retained below, followed by their plan 3.5 decisions or defaults. E4, E10 and E12 are decided; E8 is decided in task 1.2, E7 in task 1.5 and E5 in task 1.6. The other items use defaults and are finished in the named tasks; E6, E9 and E11 retain their current schema shapes until then.
+The original task 1.1 questions are retained below, followed by their plan 3.5 decisions or defaults. E4, E10 and E12 are decided; E8 is decided in task 1.2, E7 in task 1.5 and E5 in task 1.6. The other items use defaults and are finished in the named tasks; E2, E3 and E9 are decided in task 1.8; E6 and E11 retain their current schema shapes until their tasks.
 
 - **E1.** Will, what server message and correlation fields should carry the String returned by describeAbility/getActivateDescription? Section 3.2 promises a tooltip reply but 3.1 names none.
 
@@ -433,13 +478,13 @@ The original task 1.1 questions are retained below, followed by their plan 3.5 d
 
   Default (plan 3.5): `log` gains `entryType` (Forge `GameLogEntryType`); `logTail` is its own message with `entries[]`. Finished in task 1.8.
 
-  Status: default, finished in task 1.8
+  Status: decided (task 1.8)
 
 - **E3.** Will, what are the allowed message.level values besides rejected, how should message/showErrorDialog titles be represented, and where should the rejection reason come from when flashIncorrectAction supplies no text?
 
   Default (plan 3.5): `message.level` is one of `info`, `warning`, `error`, `rejected`; optional `title`. `flashIncorrectAction` becomes `rejected` with a generic text; `ActionRouter` rejections carry their own reason. Finished in task 1.8.
 
-  Status: default, finished in task 1.8
+  Status: decided (task 1.8)
 
 - **E4.** Will, does nextGame.decision=rematch mean NextGameDecision.NEW or CONTINUE, and is the other decision intentionally unavailable? Forge exposes NEW, CONTINUE and QUIT.
 
@@ -473,9 +518,9 @@ The original task 1.1 questions are retained below, followed by their plan 3.5 d
 
 - **E9.** Will, what are the per-kind event payloads, zone endpoint shape, counter type/change fields, die-size field and planar-die result encoding? Should plural GameEventRollDice and other currently unlisted events (day/night, flip-onto-battlefield, snapshot restoration) get kinds, and what log fallback/correlation rules apply in task 1.8?
 
-  Default (plan 3.5): Per-kind event payloads are defined with `EventPump`. Finished in task 1.8.
+  Decision (task 1.8): Per-kind payloads, nullable mapped references, inline card stubs, planar results, and source correlation are defined in section D. ZoneRef stays `{player, zoneType}`. Only the 24 plan kinds are emitted; plural GameEventRollDice has no extra kind. Reveals are scoped to the receiving seat, with disagreements logged and conservative identity filtering retained.
 
-  Status: default, finished in task 1.8
+  Status: decided (task 1.8)
 
 - **E10.** Will, should alertUser, overlay enable/disable, finishGame/afterGameEnd/openView UI lifecycle, setPanelSelection/setCard focus, hideRevealedCards and reveal history, avatar/renderer capability, day/night UI state, and macro cancellation/playback text remain local/ignored, or receive named messages/fields? No corresponding wire representation is specified.
 

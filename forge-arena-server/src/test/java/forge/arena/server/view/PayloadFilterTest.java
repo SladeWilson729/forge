@@ -241,10 +241,10 @@ public class PayloadFilterTest {
 
     private static String generic(final GameLogEntryType type) {
         return switch (type) {
-            case ZONE_CHANGE -> "A hidden card changed zones";
-            case STACK_ADD -> "A hidden card was added to the stack";
-            case STACK_RESOLVE -> "An action involving a hidden card resolved";
-            default -> "An action involving a hidden card occurred";
+            case ZONE_CHANGE -> "A card changed zones";
+            case STACK_ADD -> "A card was added to the stack";
+            case STACK_RESOLVE -> "An action involving a card resolved";
+            default -> "An action involving a card occurred";
         };
     }
 }

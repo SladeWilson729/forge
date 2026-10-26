@@ -55,6 +55,10 @@ public final class JsonSeatRemote implements IRemote {
     private volatile boolean dirty;
     private volatile long lastStateSequence;
     private volatile JsonObject latestState;
+    private EventPump eventPump;
+    private com.google.gson.JsonArray revealed = new com.google.gson.JsonArray();
+    private volatile long revealGeneration;
+    private final Set<Integer> revealDisagreements = ConcurrentHashMap.newKeySet();
     private volatile long lastFullSnapshotSequence;
     private final AtomicLong displayCalls = new AtomicLong();
     private volatile PromptResponder promptResponder;
@@ -65,7 +69,7 @@ public final class JsonSeatRemote implements IRemote {
     private static final class PendingPrompt {
         final PromptCodec.Prompt prompt;
         final CompletableFuture<Object> answer = new CompletableFuture<>();
-        volatile String wire;
+        final java.util.concurrent.atomic.AtomicReference<String> wire = new java.util.concurrent.atomic.AtomicReference<>();
         PendingPrompt(PromptCodec.Prompt prompt) { this.prompt = prompt; }
     }
     private final ConcurrentHashMap<Integer, PendingPrompt> pending = new ConcurrentHashMap<>();
@@ -115,7 +119,12 @@ public final class JsonSeatRemote implements IRemote {
                 if (!delta.getObjectDeltas().isEmpty() || !delta.getNewObjects().isEmpty()) {
                     snapshot();
                 }
+                if (eventPump != null && !dirty && delta.hasEvents()) {
+                    eventPump.batch(delta.getEvents(), lastStateSequence).forEach(writer::send);
+                }
             }
+            case showRevealedCards -> showRevealed((Iterable<?>) args[0]);
+            case hideRevealedCards -> clearReveals();
             case message, showErrorDialog -> {
                 final JsonObject message = new JsonObject();
                 message.addProperty("type", "message");
@@ -213,6 +222,44 @@ public final class JsonSeatRemote implements IRemote {
         lastStateSequence = seq;
     }
 
+    private void showRevealed(Iterable<?> cards) {
+        if (latestState == null) return;
+        final long generation = revealGeneration;
+        final com.google.gson.JsonArray shown = new com.google.gson.JsonArray();
+        ids.clearReveals();
+        for (Object value : cards) {
+            final var card = (forge.game.card.CardView) value;
+            final var visibility = forge.arena.server.view.CardVisibility.forSeat(card, seat);
+            if (!visibility.identityVisible() && revealDisagreements.add(card.getId())) {
+                LOG.log(System.Logger.Level.WARNING,
+                        "[reveal] Forge grant disagrees with CardVisibility: seat={0} card={1} zone={2}; retaining filtered variant",
+                        seat.getId(), card.getId(), card.getZone());
+            }
+            final Object ref = ids.reveal(card.getId(), String.valueOf(card.getZone()), card.isFaceDown(), visibility.identityVisible());
+            shown.add(SeatViewSerializer.cardStub(card, seat, ref));
+        }
+        synchronized (stateLock) {
+            if (generation != revealGeneration) { ids.clearReveals(); return; }
+            revealed = shown;
+            JsonObject state = latestState.deepCopy(); state.add("revealed", shown.deepCopy()); publish(state);
+            writer.send(eventPump.reveal(shown, lastStateSequence));
+        }
+    }
+
+    /** Detached bookkeeping only; safe for replacement connections on the writer thread. */
+    void clearReveals() {
+        synchronized (stateLock) {
+            revealGeneration++; ids.clearReveals();
+            if (revealed.isEmpty()) return;
+            revealed = new com.google.gson.JsonArray();
+            if (latestState != null) {
+                JsonObject state = latestState.deepCopy(); state.remove("revealed"); publish(state);
+            }
+        }
+    }
+
+    Set<Integer> revealDisagreements() { return Set.copyOf(revealDisagreements); }
+
     private void snapshot() {
         synchronized (stateLock) { buildingSnapshot = true; }
         try {
@@ -222,16 +269,22 @@ public final class JsonSeatRemote implements IRemote {
                 seat = ArenaServerMain.playerFor(running, registeredPlayer).getView();
                 game = running;
                 writer.bindPlayer(seat.getId());
+                eventPump = null;
             }
             // Inline, on Forge's safe caller (plan 2.2 rule 1). Serializer owns the shared
             // CardVisibility/IdMapper policy; never reconstruct visibility in the transport.
             final JsonObject state = serializer.buildState(game, seat, ids, 0);
+            if (eventPump == null) eventPump = new EventPump(seat, ids);
+            final boolean gameOver = game.isGameOver();
             synchronized (stateLock) {
+                if (gameOver) { revealed = new com.google.gson.JsonArray(); revealGeneration++; ids.clearReveals(); }
+                if (!revealed.isEmpty()) state.add("revealed", revealed.deepCopy());
                 state.add("activeInput", inputTracker.toJson(ids));
                 publish(state);
                 lastFullSnapshotSequence = lastStateSequence;
                 buildingSnapshot = false;
             }
+            eventPump.snapshot(game, state, serializer.cardStubs()).forEach(writer::send);
             dirty = false;
         } catch (final RuntimeException | Error ex) {
             synchronized (stateLock) { buildingSnapshot = false; }
@@ -291,7 +344,9 @@ public final class JsonSeatRemote implements IRemote {
             try {
                 final JsonObject message = prompt.json();
                 writer.send(message);
-                request.wire = WsServer.GSON.toJson(message);
+                // The writer may already have delivered a resequenced envelope. Never
+                // overwrite that exact replay copy with this initial allocated sequence.
+                request.wire.compareAndSet(null, WsServer.GSON.toJson(message));
                 // No bridge lock is held. A reply completes on I/O, even when THIS is the EDT.
                 return request.answer.get();
             } catch (InterruptedException ex) {
@@ -330,9 +385,15 @@ public final class JsonSeatRemote implements IRemote {
 
     /** Writer-thread reconnect replay. Envelopes retain their seq and requestId, like cached state. */
     List<String> pendingPromptMessages() {
-        return pending.values().stream().filter(request -> !request.answer.isDone() && request.wire != null)
+        return pending.values().stream().filter(request -> !request.answer.isDone() && request.wire.get() != null)
                 .sorted(java.util.Comparator.comparingInt(request -> request.prompt.requestId()))
-                .map(request -> request.wire).toList();
+                .map(request -> request.wire.get()).toList();
+    }
+
+    /** Writer-owned delivery callback; detached JSON/bookkeeping only, no Forge or waiting. */
+    void promptDelivered(int requestId, String wire) {
+        PendingPrompt request = pending.get(requestId);
+        if (request != null) request.wire.set(wire);
     }
 
     String getLastReplyThread() { return lastReplyThread; }

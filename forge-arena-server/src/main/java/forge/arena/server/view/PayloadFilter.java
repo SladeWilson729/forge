@@ -43,14 +43,23 @@ public final class PayloadFilter {
 
     public JsonObject log(final GameLogEntry entry, final PlayerView seat, final Game game,
                           final IdMapper ids) {
+        return log(entry, captureLogVisibility(game, seat));
+    }
+
+    /** Detached visibility data lets events-only packets redact without a live graph walk. */
+    public record LogVisibility(Set<Integer> visibleIds, Set<String> privateNames) {
+        public static LogVisibility empty() { return new LogVisibility(Set.of(), Set.of()); }
+    }
+
+    public JsonObject log(final GameLogEntry entry, final LogVisibility visibility) {
         final JsonObject result = message("log");
         // Provenance wins even if a public copy has the same name: this entry describes a
         // particular hidden object and its text may include other private details.
         final boolean hiddenSource = entry.sourceCard() != null
-                && !CardVisibility.forSeat(entry.sourceCard(), seat).identityVisible();
+                && !visibility.visibleIds().contains(entry.sourceCard().getId());
         // Many GameLogFormatter paths have no sourceCard (tutors, random logs, combat).
         // Scan names as a fallback, but a name also visible elsewhere is already public.
-        final boolean redact = hiddenSource || containsPrivateName(entry.message(), seat, game);
+        final boolean redact = hiddenSource || visibility.privateNames().stream().anyMatch(entry.message()::contains);
         result.addProperty("text", redact ? genericText(entry.type()) : entry.message());
         result.addProperty("entryType", entry.type().name());
         return result;
@@ -70,9 +79,11 @@ public final class PayloadFilter {
         return ids.currentRef(realId).map(PayloadFilter::jsonRef);
     }
 
-    private static boolean containsPrivateName(final String text, final PlayerView seat, final Game game) {
+    /** Called only alongside a full snapshot, on its Forge-safe caller. */
+    public LogVisibility captureLogVisibility(final Game game, final PlayerView seat) {
         final Set<String> hidden = new HashSet<>();
         final Set<String> visible = new HashSet<>();
+        final Set<Integer> visibleIds = new HashSet<>();
         final EnumSet<ZoneType> zones = EnumSet.allOf(ZoneType.class);
         // Never enumerate decklists: a public name can coincidentally occur in a library.
         // Flashback is a virtual zone whose accessor can walk cards in other zones, including it.
@@ -82,6 +93,7 @@ public final class PayloadFilter {
             for (final Card card : game.getCardsIncludePhasingIn(zone)) {
                 final CardView view = card.getView();
                 final CardVisibility visibility = CardVisibility.forSeat(view, seat);
+                if (visibility.identityVisible()) visibleIds.add(view.getId());
                 final Set<String> names = visibility.identityVisible() ? visible : hidden;
                 final CardView.CardStateView identity = visibility.faceDown()
                         ? view.getAlternateState() : view.getCurrentState();
@@ -91,22 +103,22 @@ public final class PayloadFilter {
             }
         }
         hidden.removeAll(visible);
-        return hidden.stream().anyMatch(text::contains);
+        return new LogVisibility(Set.copyOf(visibleIds), Set.copyOf(hidden));
     }
 
     private static String genericText(final GameLogEntryType type) {
         return switch (type) {
-            case ZONE_CHANGE -> "A hidden card changed zones";
-            case STACK_ADD -> "A hidden card was added to the stack";
-            case STACK_RESOLVE -> "An action involving a hidden card resolved";
-            default -> "An action involving a hidden card occurred";
+            case ZONE_CHANGE -> "A card changed zones";
+            case STACK_ADD -> "A card was added to the stack";
+            case STACK_RESOLVE -> "An action involving a card resolved";
+            default -> "An action involving a card occurred";
         };
     }
 
     private static JsonObject message(final String type) {
         final JsonObject result = new JsonObject();
         result.addProperty("type", type);
-        result.addProperty("seq", 0); // SeatWriter supplies the ordered sequence in task 1.8.
+        result.addProperty("seq", 0); // SeatWriter supplies the ordered sequence.
         return result;
     }
 

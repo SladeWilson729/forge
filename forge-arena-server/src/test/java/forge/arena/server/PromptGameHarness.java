@@ -43,6 +43,10 @@ final class PromptGameHarness implements AutoCloseable {
     final CountDownLatch configured = new CountDownLatch(1), finished = new CountDownLatch(1);
     volatile Function<JsonObject, JsonElement> answer = p -> p.get("default");
     volatile boolean blockingConfirm;
+    boolean mulliganOnce;
+    boolean answerBinaryChoices;
+    boolean traceAdvance;
+    private boolean mulliganTaken;
     Game game;
     PlayerControllerHuman human;
     IGameController controller;
@@ -252,8 +256,13 @@ final class PromptGameHarness implements AutoCloseable {
 
     void advance(Predicate<Input> target) throws Exception {
         AtomicReference<Input> last = new AtomicReference<>();
+        AtomicReference<String> traced = new AtomicReference<>();
         until(() -> {
             Input input = human.getInputQueue().getInput();
+            if (traceAdvance) {
+                String step = game.getPhaseHandler().getTurn() + ":" + game.getPhaseHandler().getPhase() + ":" + input;
+                if (!step.equals(traced.getAndSet(step))) traceState("advance " + step);
+            }
             if (!ready(input)) return false;
             if (target.test(input)) return true;
             if (last.get() == input) return false;
@@ -262,6 +271,12 @@ final class PromptGameHarness implements AutoCloseable {
                 last.set(input);
                 if (socketActions) sendAction("selectPlayer", "playerId", new JsonPrimitive(human.getPlayer().getId()));
                 else controller.selectPlayer(human.getPlayer().getView(), null);
+            } else if (mulliganOnce && input instanceof InputConfirmMulligan && !mulliganTaken) {
+                mulliganTaken = true; last.set(input); controller.selectButtonCancel();
+            } else if (mulliganOnce && input instanceof InputLondonMulligan) {
+                last.set(input); controller.selectButtonCancel(); // Forge's labeled Auto button.
+            } else if (answerBinaryChoices && input instanceof InputConfirm) {
+                last.set(input); controller.selectButtonOk(); // Heads, the first offered binary label.
             } else if (input instanceof InputPassPriority || input instanceof InputConfirmMulligan) {
                 last.set(input); if (socketActions) sendAction("ok"); else controller.selectButtonOk();
             }
@@ -307,8 +322,9 @@ final class PromptGameHarness implements AutoCloseable {
     void traceState(String label) {
         final List<String> stack = new ArrayList<>();
         for (var item : game.getStack()) stack.add(item.getSpellAbility().getApi() + ": " + item.getSpellAbility());
-        System.out.printf("[prompt-state] %s thread=%s inputs=%s stack=%s%n", label,
-                Thread.currentThread().getName(), human.getInputQueue().printInputStack(), stack);
+        System.out.printf("[prompt-state] %s thread=%s turn=%s phase=%s active=%s inputs=%s stack=%s%n", label,
+                Thread.currentThread().getName(), game.getPhaseHandler().getTurn(), game.getPhaseHandler().getPhase(),
+                game.getPhaseHandler().getPlayerTurn(), human.getInputQueue().printInputStack(), stack);
     }
 
     static void dumpThreads(String label) {

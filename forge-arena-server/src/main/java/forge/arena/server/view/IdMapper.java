@@ -23,6 +23,7 @@ public final class IdMapper {
     private volatile Map<Integer, Entry> current = Map.of();
     private volatile Map<Object, Integer> reverse = Map.of();
     private volatile Map<Integer, Entry> offered = Map.of();
+    private volatile Map<Integer, Entry> revealed = Map.of();
     private Map<Integer, Entry> pending;
 
     public synchronized void beginSnapshot() {
@@ -100,6 +101,7 @@ public final class IdMapper {
         Integer id = reverse.get(wireRef);
         if (id != null) return OptionalInt.of(id);
         for (var entry : offered.entrySet()) if (entry.getValue().ref().equals(wireRef)) return OptionalInt.of(entry.getKey());
+        for (var entry : revealed.entrySet()) if (entry.getValue().ref().equals(wireRef)) return OptionalInt.of(entry.getKey());
         return OptionalInt.empty();
     }
 
@@ -126,4 +128,17 @@ public final class IdMapper {
         Entry offer = offered.get(id);
         return offer == null ? currentRef(id) : Optional.of(offer.ref());
     }
+
+    /** Reveal-only references are independent of Input offers and expire when the pane closes. */
+    public synchronized Object reveal(int id, String zone, boolean faceDown, boolean visible) {
+        Entry existing = current.get(id);
+        if (existing == null || !Objects.equals(existing.zone(), zone) || existing.faceDown() != faceDown
+                || (!visible && existing.ref() instanceof Integer)) existing = revealed.get(id);
+        Object ref = existing != null && Objects.equals(existing.zone(), zone) && existing.faceDown() == faceDown
+                && (visible || existing.ref() instanceof String) ? existing.ref() : newOpaqueId();
+        Map<Integer, Entry> next = new HashMap<>(revealed);
+        next.put(id, new Entry(zone, faceDown, visible, ref)); revealed = Map.copyOf(next); return ref;
+    }
+
+    public synchronized void clearReveals() { revealed = Map.of(); }
 }

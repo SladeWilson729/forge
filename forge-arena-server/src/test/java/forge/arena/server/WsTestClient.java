@@ -88,6 +88,11 @@ final class WsTestClient implements WebSocket.Listener, AutoCloseable {
         assertEquals(hello.get("protocolVersion").getAsInt(), 1);
         assertEquals(hello.get("serverVersion").getAsString(), "1.4-dev");
         assertEquals(hello.get("seat").getAsInt(), seat);
+        assertEquals(hello.get("seq").getAsLong(), 0L);
+        final JsonObject tail = receive();
+        assertEquals(tail.get("type").getAsString(), "logTail", "Second handshake message");
+        assertEquals(tail.get("seq").getAsLong(), 0L, "logTail is a preamble");
+        PromptAssertions.validate(tail, "logTail");
         return hello;
     }
 

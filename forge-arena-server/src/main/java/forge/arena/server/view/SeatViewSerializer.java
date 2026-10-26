@@ -35,6 +35,29 @@ import java.util.Objects;
 public final class SeatViewSerializer {
     private static final System.Logger LOG = System.getLogger(SeatViewSerializer.class.getName());
     private boolean missingLiveCardLogged;
+    private Map<JsonElement, JsonObject> lastCardStubs = Map.of();
+
+    /** Detached, seat-filtered stubs captured in the same walk as the latest snapshot. */
+    public Map<JsonElement, JsonObject> cardStubs() { return lastCardStubs; }
+
+    /** Minimal schema-valid variant for a reveal; caller supplies a scoped mapper reference. */
+    public static JsonObject cardStub(CardView view, PlayerView seat, Object ref) {
+        CardVisibility visibility = CardVisibility.forSeat(view, seat);
+        return stub(new CardInfo(view, visibility.shown(), visibility.identityVisible(), visibility.faceDown(),
+                ref instanceof Integer id ? new JsonPrimitive(id) : new JsonPrimitive((String) ref)));
+    }
+
+    private static JsonObject stub(CardInfo info) {
+        JsonObject result = new JsonObject(); result.add("id", info.ref());
+        if (!info.shown()) { result.addProperty("hidden", true); return result; }
+        CardView.CardStateView current = info.card().getCurrentState();
+        CardView.CardStateView identity = info.identityVisible() && info.faceDown() ? info.card().getAlternateState() : current;
+        if (info.identityVisible()) { result.addProperty("name", identity.getName()); result.addProperty("set", identity.getSetCode()); }
+        result.addProperty("types", identity.getType().toString());
+        result.addProperty("faceDown", info.faceDown()); result.addProperty("tapped", info.card().isTapped());
+        result.addProperty("power", current.getPower()); result.addProperty("toughness", current.getToughness());
+        return result;
+    }
 
     public JsonObject buildState(final Game game, final PlayerView seat, final IdMapper ids, final long seq) {
         Objects.requireNonNull(game);
@@ -101,6 +124,9 @@ public final class SeatViewSerializer {
             // once endSnapshot has published all card refs; the serializer never reads Inputs.
             input.addProperty("kind", "waiting");
             state.add("activeInput", input);
+            Map<JsonElement, JsonObject> stubs = new HashMap<>();
+            for (CardInfo info : cards.values()) stubs.put(info.ref(), stub(info));
+            lastCardStubs = Map.copyOf(stubs);
             return state;
         }
 

@@ -12,6 +12,36 @@ import java.util.concurrent.TimeUnit;
 import static org.testng.Assert.*;
 
 public class WsServerTest {
+    @Test(timeOut = 30_000)
+    public void handshakeDropsCoveredOfflineEventsAndLogs() throws Exception {
+        try (WsServer server = new WsServer("127.0.0.1", 0); WsTestClient client = new WsTestClient()) {
+            server.writer(0).bindPlayer(0); server.start();
+            JsonObject oldLog = new JsonObject(); oldLog.addProperty("type", "log");
+            oldLog.addProperty("text", "covered"); oldLog.addProperty("entryType", "ZONE_CHANGE");
+            server.writer(0).send(oldLog);
+            JsonObject oldEvent = new JsonObject(); oldEvent.addProperty("type", "event");
+            oldEvent.addProperty("kind", "shuffle"); oldEvent.addProperty("stateSeq", 0);
+            server.writer(0).send(oldEvent);
+            JsonObject cached = state("offline latest"); server.writer(0).send(cached);
+            JsonObject newerLog = oldLog.deepCopy(); newerLog.addProperty("text", "newer"); server.writer(0).send(newerLog);
+            JsonObject newerEvent = oldEvent.deepCopy(); newerEvent.addProperty("stateSeq", cached.get("seq").getAsLong());
+            server.writer(0).send(newerEvent);
+            client.connect(HttpClient.newHttpClient(), server.getPort(), "/ws?seat=0"); client.hello(0);
+            JsonObject tail = client.history().get(1).object();
+            assertEquals(tail.getAsJsonArray("entries").size(), 1);
+            assertEquals(tail.getAsJsonArray("entries").get(0).getAsJsonObject().get("seq"), oldLog.get("seq"));
+            assertEquals(client.receive(), cached, "Cached state is third, with its original seq");
+            assertEquals(client.receive(), newerLog);
+            assertEquals(client.receive(), newerEvent);
+            long previous = cached.get("seq").getAsLong();
+            for (var received : client.history().subList(3, client.history().size())) {
+                long seq = received.object().get("seq").getAsLong();
+                assertTrue(seq > previous, "No covered offline event/log after cached state"); previous = seq;
+            }
+            assertEquals(client.history().size(), 5);
+        }
+    }
+
     private static JsonObject state(final String marker) {
         // Transport fixture only; complete live states are schema-validated in SeatStreamTest.
         final JsonObject state = new JsonObject();
@@ -57,7 +87,7 @@ public class WsServerTest {
             final JsonObject next = state("Updated seat zero");
             server.writer(0).send(next);
             assertEquals(second.receive(), next);
-            assertEquals(otherSeat.history().size(), 2, "No seat-zero state reached seat two");
+            assertEquals(otherSeat.history().size(), 3, "Hello, logTail, and only seat two's state");
         } finally {
             server.close();
             executor.shutdownNow();
@@ -97,7 +127,11 @@ public class WsServerTest {
         try (WsTestClient client = new WsTestClient()) {
             server.writer(3).bindPlayer(1);
             server.start();
-            // Queue non-state messages while offline. Coalescing must not lose or reorder them.
+            final HttpClient http = HttpClient.newBuilder().executor(executor)
+                    .connectTimeout(Duration.ofSeconds(5)).build();
+            client.connect(http, server.getPort(), "/ws?seat=3");
+            client.hello(3);
+            // While connected, coalescing must not lose or reorder non-state messages.
             for (int i = 0; i < 25; i++) {
                 final JsonObject message = new JsonObject();
                 message.addProperty("type", "message");
@@ -106,21 +140,19 @@ public class WsServerTest {
                 server.writer(3).send(message);
                 server.writer(3).send(state("State " + i));
             }
-            final HttpClient http = HttpClient.newBuilder().executor(executor)
-                    .connectTimeout(Duration.ofSeconds(5)).build();
-            client.connect(http, server.getPort(), "/ws?seat=3");
-            client.hello(3);
             long previous = 0;
-            for (int i = 0; i < 25; i++) {
+            int receivedMessages = 0;
+            boolean finalState = false;
+            while (receivedMessages < 25 || !finalState) {
                 final JsonObject message = client.receive();
-                assertEquals(message.get("text").getAsString(), "Message " + i);
                 assertTrue(message.get("seq").getAsLong() > previous);
                 previous = message.get("seq").getAsLong();
+                if (message.get("type").getAsString().equals("state")) {
+                    finalState |= message.get("marker").getAsString().equals("State 24");
+                } else {
+                    assertEquals(message.get("text").getAsString(), "Message " + receivedMessages++);
+                }
             }
-            final JsonObject last = client.receive();
-            assertEquals(last.get("marker").getAsString(), "State 24");
-            assertTrue(last.get("seq").getAsLong() > previous);
-            assertEquals(client.history().size(), 27, "Hello, all messages, and only the latest state");
         } finally {
             server.close();
             executor.shutdownNow();

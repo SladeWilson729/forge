@@ -763,6 +763,13 @@
         },
         "activeInput": {
           "$ref": "#/$defs/ActiveInput"
+        },
+        "revealed": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Card"
+          },
+          "$comment": "Task 1.8: targeted seat only, reveal-scoped IdMapper refs, cleared on hide/game over/replacement. Not match reveal history."
         }
       },
       "required": [
@@ -1225,7 +1232,7 @@
           "const": "hello"
         },
         "seq": {
-          "$ref": "#/$defs/Sequence"
+          "const": 0
         },
         "protocolVersion": {
           "const": 1
@@ -1378,6 +1385,13 @@
         },
         "activeInput": {
           "$ref": "#/$defs/ActiveInput"
+        },
+        "revealed": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Card"
+          },
+          "$comment": "Task 1.8: targeted seat only, reveal-scoped IdMapper refs, cleared on hide/game over/replacement. Not match reveal history."
         }
       },
       "required": [
@@ -1411,16 +1425,33 @@
         "stateSeq": {
           "$ref": "#/$defs/Sequence"
         },
+        "cardStubs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Card"
+          }
+        },
+        "stackId": {
+          "$ref": "#/$defs/Int32"
+        },
+        "combat": {
+          "type": "boolean"
+        },
+        "infect": {
+          "type": "boolean"
+        },
+        "damageType": {
+          "enum": [
+            "Normal",
+            "M1M1Counters",
+            "Deathtouch",
+            "LoyaltyLoss"
+          ]
+        },
         "cardIds": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/CardRef"
-          }
-        },
-        "playerIds": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/PlayerRef"
           }
         },
         "from": {
@@ -1443,11 +1474,145 @@
             }
           ]
         },
+        "playerIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PlayerRef"
+          }
+        },
+        "ability": {
+          "type": "boolean"
+        },
+        "reason": {
+          "enum": [
+            "fizzled",
+            "removed"
+          ]
+        },
+        "sourceCardId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CardRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EntityRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "amount": {
           "$ref": "#/$defs/Int32"
         },
-        "result": {
-          "$comment": "Plan 3.1a/task 1.8; event-specific result encoding unresolved E9. Coin bool, numeric die int and planar enum are source-backed below."
+        "counterType": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "oldValue": {
+          "$ref": "#/$defs/Int32"
+        },
+        "newValue": {
+          "$ref": "#/$defs/Int32"
+        },
+        "attacks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "cardId": {
+                "$ref": "#/$defs/CardRef"
+              },
+              "defender": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/EntityRef"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "cardId",
+              "defender"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "blocks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "attackerId": {
+                "$ref": "#/$defs/CardRef"
+              },
+              "blockerId": {
+                "$ref": "#/$defs/CardRef"
+              }
+            },
+            "required": [
+              "attackerId",
+              "blockerId"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "result": {},
+        "startingToss": {
+          "type": "boolean"
+        },
+        "sides": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "turn": {
+          "$ref": "#/$defs/Int32"
+        },
+        "previousPlayerId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlayerRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "playerId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlayerRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "winner": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -1456,23 +1621,493 @@
         "kind",
         "stateSeq"
       ],
-      "additionalProperties": true,
+      "additionalProperties": false,
       "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "zoneChange"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "cardIds": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/CardRef"
+                }
+              },
+              "from": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ZoneRef"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "to": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ZoneRef"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "cardIds",
+              "from",
+              "to"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "landPlayed"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "cardIds": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/CardRef"
+                }
+              },
+              "playerIds": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/PlayerRef"
+                }
+              }
+            },
+            "required": [
+              "cardIds",
+              "playerIds"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "spellCast"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "cardIds": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/CardRef"
+                }
+              },
+              "ability": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "cardIds",
+              "ability"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "resolved"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "cardIds": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/CardRef"
+                }
+              }
+            },
+            "required": [
+              "cardIds"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "countered"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "cardIds": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/CardRef"
+                }
+              },
+              "reason": {
+                "enum": [
+                  "fizzled",
+                  "removed"
+                ]
+              }
+            },
+            "required": [
+              "cardIds",
+              "reason"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "tap"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "cardIds": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/CardRef"
+                }
+              }
+            },
+            "required": [
+              "cardIds"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "untap"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "cardIds": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/CardRef"
+                }
+              }
+            },
+            "required": [
+              "cardIds"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "damage"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "sourceCardId": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/CardRef"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "target": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/EntityRef"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "amount": {
+                "$ref": "#/$defs/Int32"
+              }
+            },
+            "required": [
+              "sourceCardId",
+              "target",
+              "amount"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "counterChange"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "target": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/EntityRef"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "counterType": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "oldValue": {
+                "$ref": "#/$defs/Int32"
+              },
+              "newValue": {
+                "$ref": "#/$defs/Int32"
+              }
+            },
+            "required": [
+              "target",
+              "counterType",
+              "oldValue",
+              "newValue"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "tokenCreated"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "cardIds": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/CardRef"
+                }
+              }
+            },
+            "required": [
+              "cardIds"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "attack"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "playerIds": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/PlayerRef"
+                }
+              },
+              "attacks": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "cardId": {
+                      "$ref": "#/$defs/CardRef"
+                    },
+                    "defender": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/EntityRef"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "cardId",
+                    "defender"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "playerIds",
+              "attacks"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "block"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "playerIds": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/PlayerRef"
+                }
+              },
+              "blocks": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "attackerId": {
+                      "$ref": "#/$defs/CardRef"
+                    },
+                    "blockerId": {
+                      "$ref": "#/$defs/CardRef"
+                    }
+                  },
+                  "required": [
+                    "attackerId",
+                    "blockerId"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "playerIds",
+              "blocks"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "shuffle"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "playerIds": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/PlayerRef"
+                }
+              }
+            },
+            "required": [
+              "playerIds"
+            ]
+          }
+        },
         {
           "if": {
             "properties": {
               "kind": {
                 "const": "coinFlip"
               }
-            }
+            },
+            "required": [
+              "kind"
+            ]
           },
           "then": {
             "properties": {
+              "playerIds": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/PlayerRef"
+                }
+              },
               "result": {
-                "type": "boolean",
-                "$comment": "forge-game/src/main/java/forge/game/event/GameEventFlipCoin.java:5"
+                "type": "boolean"
+              },
+              "startingToss": {
+                "type": "boolean"
               }
-            }
+            },
+            "required": [
+              "playerIds",
+              "result",
+              "startingToss"
+            ]
           }
         },
         {
@@ -1481,30 +2116,324 @@
               "kind": {
                 "const": "dieRoll"
               }
-            }
+            },
+            "required": [
+              "kind"
+            ]
           },
           "then": {
             "properties": {
+              "sides": {
+                "type": "integer",
+                "minimum": 0
+              },
               "result": {
                 "anyOf": [
                   {
-                    "$ref": "#/$defs/Int32"
+                    "type": "integer",
+                    "minimum": 0
                   },
                   {
-                    "type": "string",
                     "enum": [
                       "Planeswalk",
                       "Chaos",
                       "Blank"
                     ]
                   }
-                ],
-                "$comment": "forge-game/src/main/java/forge/game/event/GameEventRollDie.java:5 — int result plus optional PlanarDice; exact planar encoding and die-size field name E9."
+                ]
               }
-            }
+            },
+            "required": [
+              "sides",
+              "result"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "mulligan"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "playerIds": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/PlayerRef"
+                }
+              }
+            },
+            "required": [
+              "playerIds"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "turnBegan"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "playerIds": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/PlayerRef"
+                }
+              },
+              "turn": {
+                "$ref": "#/$defs/Int32"
+              }
+            },
+            "required": [
+              "playerIds",
+              "turn"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "reveal"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "cardIds": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/CardRef"
+                }
+              }
+            },
+            "required": [
+              "cardIds"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "lifeChange"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "playerIds": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/PlayerRef"
+                }
+              },
+              "oldValue": {
+                "$ref": "#/$defs/Int32"
+              },
+              "newValue": {
+                "$ref": "#/$defs/Int32"
+              },
+              "amount": {
+                "$ref": "#/$defs/Int32"
+              }
+            },
+            "required": [
+              "playerIds",
+              "oldValue",
+              "newValue",
+              "amount"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "triggerFired"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "cardIds": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/CardRef"
+                }
+              },
+              "stackId": {
+                "$ref": "#/$defs/Int32"
+              }
+            },
+            "required": [
+              "cardIds",
+              "stackId"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "monarchChange"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "previousPlayerId": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/PlayerRef"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "playerId": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/PlayerRef"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "previousPlayerId",
+              "playerId"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "initiativeChange"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "previousPlayerId": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/PlayerRef"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "playerId": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/PlayerRef"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "previousPlayerId",
+              "playerId"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "playerEliminated"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "playerIds": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/PlayerRef"
+                }
+              }
+            },
+            "required": [
+              "playerIds"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "gameOver"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "winner": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "turn": {
+                "$ref": "#/$defs/Int32"
+              }
+            },
+            "required": [
+              "winner",
+              "turn"
+            ]
           }
         }
-      ]
+      ],
+      "$comment": "Task 1.8: mapped references and inline seat-filtered cardStubs cover transient cards omitted by coalescing. stateSeq is the originating snapshot sequence; envelope seq is ordered for delivery."
     },
     "log": {
       "type": "object",
@@ -1538,13 +2467,14 @@
           "const": "logTail"
         },
         "seq": {
-          "$ref": "#/$defs/Sequence"
+          "const": 0
         },
         "entries": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/LogEntry"
-          }
+          },
+          "maxItems": 200
         }
       },
       "required": [
@@ -1553,7 +2483,7 @@
         "entries"
       ],
       "additionalProperties": true,
-      "$comment": "Plan 3.1 and 3.5 E2: separate message with the last 200 filtered log entries on reconnect/resync. Finished in task 1.8."
+      "$comment": "Connection/resync preamble, seq 0. Up to 200 seat-filtered log entries covered by cached state: entry.seq <= cached state.seq. Entry seq is preserved."
     },
     "prompt": {
       "type": "object",

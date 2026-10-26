@@ -15,7 +15,7 @@ import java.util.concurrent.locks.LockSupport;
 /** One daemon per seat; no Forge objects or mutable JSON cross to this thread. */
 public final class SeatWriter implements AutoCloseable {
     private static final System.Logger LOG = System.getLogger(SeatWriter.class.getName());
-    private record Outbound(long seq, String json, boolean state) { }
+    private record Outbound(long seq, String json, boolean state, long stateSeq) { }
 
     // Slight headroom below 10/s also avoids a local client's timer jitter counting 11 arrivals.
     private static final long STATE_INTERVAL = TimeUnit.MILLISECONDS.toNanos(125);
@@ -35,6 +35,9 @@ public final class SeatWriter implements AutoCloseable {
     // Only the writer thread accesses the channel and send timing.
     private Channel channel;
     private long nextStateAt;
+    private long lastStateSeq;
+    private boolean replayPending;
+    private final ArrayDeque<JsonObject> logTail = new ArrayDeque<>();
 
     public SeatWriter(final int seat) {
         this.seat = seat;
@@ -72,7 +75,9 @@ public final class SeatWriter implements AutoCloseable {
             seq = ++sequence;
             message.addProperty("seq", seq);
             final boolean state = "state".equals(message.get("type").getAsString());
-            final Outbound outbound = new Outbound(seq, WsServer.GSON.toJson(message), state);
+            final long dependency = "event".equals(message.get("type").getAsString())
+                    ? message.get("stateSeq").getAsLong() : 0;
+            final Outbound outbound = new Outbound(seq, WsServer.GSON.toJson(message), state, dependency);
             if (state) {
                 pendingState = outbound;
             } else {
@@ -118,65 +123,119 @@ public final class SeatWriter implements AutoCloseable {
     void resync() { resyncRequested.set(true); LockSupport.unpark(thread); }
 
     private void replayCached() {
-        if (lastState != null) write(lastState);
+        // Freeze this connection's cutoff and retire its covered queue prefix atomically.
+        // Offline logs are still represented in logTail, even if never written individually.
+        synchronized (queueLock) {
+            if (pendingState != null && pendingState.seq() > lastStateSeq) {
+                lastState = pendingState.json(); lastStateSeq = pendingState.seq(); pendingState = null;
+            }
+            while (!messages.isEmpty() && messages.peekFirst().seq() <= lastStateSeq) {
+                Outbound covered = messages.removeFirst();
+                rememberLog(covered);
+                // sendAndWait registers before enqueueing, but may not yet have saved its
+                // envelope. Preserve a covered prompt before dropping its queue copy.
+                rememberPrompt(covered.json());
+            }
+        }
+        JsonObject tail = new JsonObject(); tail.addProperty("type", "logTail"); tail.addProperty("seq", 0L);
+        com.google.gson.JsonArray entries = new com.google.gson.JsonArray();
+        logTail.stream().filter(entry -> entry.get("seq").getAsLong() <= lastStateSeq)
+                .forEach(entry -> entries.add(entry.deepCopy()));
+        tail.add("entries", entries); write(WsServer.GSON.toJson(tail));
+        if (lastState != null) {
+            write(lastState); nextStateAt = System.nanoTime() + STATE_INTERVAL;
+        }
         JsonSeatRemote receiver = remote;
-        if (receiver != null) receiver.pendingPromptMessages().forEach(this::write);
+        if (receiver != null) {
+            for (String prompt : receiver.pendingPromptMessages()) {
+                final int id = JsonParser.parseString(prompt).getAsJsonObject().get("requestId").getAsInt();
+                synchronized (queueLock) {
+                    messages.removeIf(message -> {
+                        JsonObject json = JsonParser.parseString(message.json()).getAsJsonObject();
+                        return "prompt".equals(json.get("type").getAsString()) && json.get("requestId").getAsInt() == id;
+                    });
+                }
+                write(prompt);
+            }
+        }
+        replayPending = false;
+    }
+
+    private void rememberLog(Outbound message) {
+        JsonObject sent = JsonParser.parseString(message.json()).getAsJsonObject();
+        if ("log".equals(sent.get("type").getAsString())) {
+            sent.remove("type"); logTail.addLast(sent);
+            while (logTail.size() > 200) logTail.removeFirst();
+        }
+    }
+
+    /** Under queueLock: retain live events/logs in FIFO order when a coalesced state overtakes them.
+     * Only their envelope seq changes; stateSeq and prompt requestId remain stable. Future states
+     * allocate above the entire resequenced queue, so neither snapshots nor action baseSeq change.
+     */
+    private void sequenceAfter(long stateSeq) {
+        if (messages.isEmpty() || messages.peekFirst().seq() > stateSeq) return;
+        ArrayDeque<Outbound> ordered = new ArrayDeque<>();
+        for (Outbound message : messages) {
+            JsonObject json = JsonParser.parseString(message.json()).getAsJsonObject();
+            long seq = ++sequence; json.addProperty("seq", seq);
+            ordered.addLast(new Outbound(seq, WsServer.GSON.toJson(json), false, message.stateSeq()));
+        }
+        messages.clear(); messages.addAll(ordered);
     }
 
     private void run() {
         while (!closed) {
-            if (resyncRequested.getAndSet(false)) replayCached();
+            if (resyncRequested.getAndSet(false)) replayPending = true;
             String ioMessage;
             while ((ioMessage = ioMessages.poll()) != null) send(JsonParser.parseString(ioMessage).getAsJsonObject());
             Channel connected;
             // Startup connections remain queued until RegisteredPlayer has a real Forge id.
             // No socket output can precede the bound hello; no I/O thread waits for it.
             while (hello != null && (connected = connections.poll()) != null) {
+                final boolean replacement = channel != null;
                 if (channel != null && channel != connected) {
                     channel.writeAndFlush(new CloseWebSocketFrame(1000, "Replaced by a new connection for this seat"))
                             .addListener(ChannelFutureListener.CLOSE);
                 }
                 channel = connected;
-                write(hello);
-                if (lastState != null) {
-                    write(lastState);
-                    nextStateAt = System.nanoTime() + STATE_INTERVAL;
-                }
-                final JsonSeatRemote receiver = remote;
-                if (receiver != null) {
-                    for (String prompt : receiver.pendingPromptMessages()) {
-                        final int id = JsonParser.parseString(prompt).getAsJsonObject().get("requestId").getAsInt();
-                        synchronized (queueLock) {
-                            // A prompt queued during disconnect is replayed here exactly once.
-                            messages.removeIf(message -> {
-                                final JsonObject json = JsonParser.parseString(message.json()).getAsJsonObject();
-                                return "prompt".equals(json.get("type").getAsString()) && json.get("requestId").getAsInt() == id;
-                            });
-                        }
-                        write(prompt);
+                if (replacement) {
+                    if (remote != null) remote.clearReveals();
+                    // Cached replay must not briefly reopen the previous connection's reveal.
+                    if (lastState != null) {
+                        JsonObject cached = JsonParser.parseString(lastState).getAsJsonObject();
+                        cached.remove("revealed"); lastState = WsServer.GSON.toJson(cached);
                     }
                 }
+                write(hello);
+                replayPending = true;
+            }
+            if (replayPending && channel != null && channel.isActive()) {
+                if (lastState != null && System.nanoTime() < nextStateAt) {
+                    LockSupport.parkNanos(this, nextStateAt - System.nanoTime()); continue;
+                }
+                replayCached();
             }
             final Outbound next;
             long delay = TimeUnit.SECONDS.toNanos(1);
             final boolean connectedNow = channel != null && channel.isActive();
             synchronized (queueLock) {
                 final Outbound first = messages.peekFirst();
-                final Outbound candidate = pendingState != null && (first == null || pendingState.seq() < first.seq())
+                // A newer coalesced snapshot may overtake an event's original envelope.
+                // Its dependency and inline stubs stay unchanged; resequence the live queue.
+                final Outbound candidate = pendingState != null && (first == null || pendingState.seq() < first.seq()
+                        || first.stateSeq() > lastStateSeq)
                         ? pendingState : first;
-                if (candidate == null) {
+                if (candidate == null || !connectedNow) {
                     next = null;
                 } else if (candidate.state() && System.nanoTime() < nextStateAt) {
                     delay = nextStateAt - System.nanoTime();
-                    next = null;
-                } else if (!candidate.state() && !connectedNow) {
-                    // Keep non-state messages while disconnected. Do not advance the cache past
-                    // them: reconnect's hello/cache must still precede these accepted sequences.
                     next = null;
                 } else {
                     next = candidate;
                     if (next.state()) {
                         pendingState = null;
+                        sequenceAfter(next.seq());
                     } else {
                         messages.removeFirst();
                     }
@@ -187,7 +246,10 @@ public final class SeatWriter implements AutoCloseable {
             } else {
                 if (next.state()) {
                     lastState = next.json();
+                    lastStateSeq = next.seq();
                     nextStateAt = System.nanoTime() + STATE_INTERVAL;
+                } else {
+                    rememberLog(next);
                 }
                 write(next.json());
             }
@@ -196,7 +258,16 @@ public final class SeatWriter implements AutoCloseable {
 
     private void write(final String json) {
         if (channel != null && channel.isActive()) {
+            rememberPrompt(json);
             channel.writeAndFlush(new TextWebSocketFrame(json));
+        }
+    }
+
+    private void rememberPrompt(String json) {
+        if (remote == null) return;
+        JsonObject message = JsonParser.parseString(json).getAsJsonObject();
+        if ("prompt".equals(message.get("type").getAsString())) {
+            remote.promptDelivered(message.get("requestId").getAsInt(), json);
         }
     }
 

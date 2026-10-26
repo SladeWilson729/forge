@@ -24,6 +24,79 @@ import static org.testng.Assert.assertTrue;
 
 @Test(singleThreaded = true)
 public class HiddenInfoSnapshotTest {
+    @Test
+    public void eventStubsPreserveDrawAndFaceDownPrivacy() {
+        final ScenarioGame scenario = new ScenarioGame();
+        final Card libraryCard = scenario.addCardToZone("Consecrated Sphinx", 1, ZoneType.Library);
+        final var from = libraryCard.getZone().getView();
+        final Card drawn = scenario.player(1).drawCards(1).get(0);
+        final Card down = scenario.addCardToZone("Willbender", 1, ZoneType.Battlefield);
+        assertTrue(down.turnFaceDown());
+        for (int seat = 0; seat < 4; seat++) {
+            final SeatViewSerializer serializer = new SeatViewSerializer();
+            final JsonObject state = serializer.buildState(scenario.game, scenario.player(seat).getView(), scenario.ids[seat], 7);
+            ScenarioGame.validate(state, "state");
+            final var pump = new forge.arena.server.EventPump(scenario.player(seat).getView(), scenario.ids[seat]);
+            pump.snapshot(scenario.game, state, serializer.cardStubs());
+            final var payloads = pump.batch(List.of(
+                    new forge.game.event.GameEventCardChangeZone(drawn.getView(), from, drawn.getZone().getView()),
+                    new forge.game.event.GameEventCardChangeZone(down.getView(), null, down.getZone().getView())), 7);
+            assertEquals(payloads.size(), 2);
+            for (int i = 0; i < payloads.size(); i++) {
+                JsonObject payload = payloads.get(i); ScenarioGame.validate(payload, "event");
+                assertEquals(payload.getAsJsonArray("cardStubs").size(), 1);
+                assertEquals(payload.getAsJsonArray("cardStubs").get(0).getAsJsonObject().get("id"),
+                        payload.getAsJsonArray("cardIds").get(0));
+                if (seat != 1) noIdentity(payload, i == 0 ? drawn : down);
+            }
+        }
+    }
+
+    @Test
+    public void libraryRevealIsSeatScopedAndReferencesExpire() {
+        final ScenarioGame scenario = new ScenarioGame();
+        final Card card = scenario.addCardToZone("Consecrated Sphinx", 1, ZoneType.Library);
+        final List<forge.arena.server.SeatWriter> writers = new ArrayList<>();
+        final List<forge.arena.server.JsonSeatRemote> remotes = new ArrayList<>();
+        try {
+            for (int seat = 0; seat < 4; seat++) {
+                var writer = new forge.arena.server.SeatWriter(seat); writers.add(writer);
+                var remote = new forge.arena.server.JsonSeatRemote(scenario.game, scenario.player(seat).getView(), writer);
+                remotes.add(remote);
+                remote.send(new forge.gamemodes.net.event.GuiGameEvent(forge.gamemodes.net.ProtocolMethod.setGameView, scenario.game.getView()));
+            }
+            // Forge's tempShowCards adds this exact may-look permission before the GUI call.
+            card.addMayLookTemp(scenario.player(0));
+            remotes.get(0).send(new forge.gamemodes.net.event.GuiGameEvent(forge.gamemodes.net.ProtocolMethod.showRevealedCards, List.of(card.getView())));
+            for (int seat = 0; seat < 4; seat++) {
+                JsonObject state = forge.arena.server.EventTestSupport.state(remotes.get(seat));
+                ScenarioGame.validate(state, "state");
+                if (seat == 0) assertEquals(state.getAsJsonArray("revealed").get(0).getAsJsonObject().get("name").getAsString(), card.getName());
+                else { assertFalse(state.has("revealed")); noIdentity(state, card); }
+                assertTrue(forge.arena.server.EventTestSupport.disagreements(remotes.get(seat)).isEmpty());
+            }
+            var ref = forge.arena.server.EventTestSupport.state(remotes.get(0)).getAsJsonArray("revealed")
+                    .get(0).getAsJsonObject().get("id").getAsString();
+            assertTrue(forge.arena.server.EventTestSupport.ids(remotes.get(0)).resolve(ref).isPresent());
+            remotes.get(0).send(new forge.gamemodes.net.event.GuiGameEvent(forge.gamemodes.net.ProtocolMethod.hideRevealedCards));
+            assertFalse(forge.arena.server.EventTestSupport.state(remotes.get(0)).has("revealed"));
+            assertTrue(forge.arena.server.EventTestSupport.ids(remotes.get(0)).resolve(ref).isEmpty());
+            remotes.get(0).send(new forge.gamemodes.net.event.GuiGameEvent(forge.gamemodes.net.ProtocolMethod.showRevealedCards, List.of(card.getView())));
+            var replacementRef = forge.arena.server.EventTestSupport.state(remotes.get(0)).getAsJsonArray("revealed")
+                    .get(0).getAsJsonObject().get("id").getAsString();
+            assertNotEquals(replacementRef, ref);
+            forge.arena.server.EventTestSupport.replacement(remotes.get(0));
+            assertTrue(forge.arena.server.EventTestSupport.ids(remotes.get(0)).resolve(replacementRef).isEmpty());
+            assertFalse(forge.arena.server.EventTestSupport.state(remotes.get(0)).has("revealed"));
+            remotes.get(0).send(new forge.gamemodes.net.event.GuiGameEvent(forge.gamemodes.net.ProtocolMethod.showRevealedCards, List.of(card.getView())));
+            String finalRef = forge.arena.server.EventTestSupport.state(remotes.get(0)).getAsJsonArray("revealed")
+                    .get(0).getAsJsonObject().get("id").getAsString();
+            scenario.game.setGameOver(forge.game.GameEndReason.Draw);
+            remotes.get(0).send(new forge.gamemodes.net.event.GuiGameEvent(forge.gamemodes.net.ProtocolMethod.setGameView, scenario.game.getView()));
+            assertFalse(forge.arena.server.EventTestSupport.state(remotes.get(0)).has("revealed"));
+            assertTrue(forge.arena.server.EventTestSupport.ids(remotes.get(0)).resolve(finalRef).isEmpty());
+        } finally { writers.forEach(forge.arena.server.SeatWriter::close); }
+    }
     @BeforeClass
     public void initialize() {
         ScenarioGame.initialize();
