@@ -95,6 +95,8 @@ public class CombatAndManaStateTest {
     @BeforeClass
     public void initialize() {
         ArenaServerMain.initializeForge();
+        assertTrue(FModel.getPreferences().getPrefBoolean(FPref.UI_SHOW_ACTIONABLE_HIGHLIGHTS),
+                "Live server boot enables Forge's actionable candidates");
         FModel.getPreferences().setPref(FPref.UI_RECORD_REPLAYS, false);
         FModel.getPreferences().setPref(FPref.UI_SHOW_ACTIONABLE_HIGHLIGHTS, false);
         schema = JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012).getSchema(
@@ -251,7 +253,6 @@ public class CombatAndManaStateTest {
         }
         try {
             client.connect(HttpClient.newHttpClient(), server.getPort(), "/ws?seat=0");
-            client.hello(0);
             // HostedMatch synchronously sets/opens the GUI before scheduling the game loop.
             // Its initial snapshots must use the same EDT as subsequent UI actions.
             edt(() -> {
@@ -261,6 +262,7 @@ public class CombatAndManaStateTest {
                 controller = gui.getGameController(human.getPlayer().getView());
                 return null;
             });
+            assertEquals(client.hello(0).get("playerId").getAsInt(), human.getPlayer().getId());
             advanceUntil(input -> configured.getCount() == 0 && input instanceof InputPassPriority
                     && game.getPhaseHandler().getPlayerTurn() == human.getPlayer()
                     && game.getPhaseHandler().getPhase() == PhaseType.MAIN1, "scenario main phase", false);
@@ -466,6 +468,12 @@ public class CombatAndManaStateTest {
     }
 
     private void checkInputCoverage() throws Exception {
+        for (String expected : List.of("priority", "declareAttackers", "declareBlockers")) {
+            assertTrue(built.stream().anyMatch(item -> kind(item.state()).equals(expected)
+                    && item.state().getAsJsonObject("activeInput").has("highlighted")
+                    && item.state().getAsJsonObject("activeInput").getAsJsonArray("highlighted").size() > 0),
+                    "Forge must supply actionable candidates for " + expected);
+        }
         for (String expected : List.of("mulligan", "priority", "payMana", "target", "declareAttackers", "declareBlockers")) {
             assertTrue(built.stream().anyMatch(item -> {
                 final JsonObject input = item.state().getAsJsonObject("activeInput");

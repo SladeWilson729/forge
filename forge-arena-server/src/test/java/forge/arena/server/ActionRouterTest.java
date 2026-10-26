@@ -55,6 +55,7 @@ public class ActionRouterTest {
     @Test public void socketPingOwnershipAndSchemaRejection() throws Exception {
         try (WsServer server = new WsServer("127.0.0.1", 0); WsTestClient client = new WsTestClient()) {
             new JsonSeatRemote((Game) null, null, server.writer(1)); server.start();
+            server.writer(1).bindPlayer(17); // Transport-only fixture: no live game.
             client.connect(HttpClient.newHttpClient(), server.getPort(), "/ws?seat=1"); client.hello(1);
             client.send(JsonParser.parseString("{\"type\":\"ping\"}").getAsJsonObject());
             JsonObject pong = client.receive(); assertEquals(pong.get("type").getAsString(), "pong"); PromptAssertions.validate(pong, "pong");

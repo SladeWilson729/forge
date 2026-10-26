@@ -81,13 +81,14 @@ final class WsTestClient implements WebSocket.Listener, AutoCloseable {
         return received.object();
     }
 
-    void hello(final int seat) throws InterruptedException {
+    JsonObject hello(final int seat) throws InterruptedException {
         final JsonObject hello = receive();
         PromptAssertions.validate(hello, "hello");
         assertEquals(hello.get("type").getAsString(), "hello");
         assertEquals(hello.get("protocolVersion").getAsInt(), 1);
         assertEquals(hello.get("serverVersion").getAsString(), "1.4-dev");
         assertEquals(hello.get("seat").getAsInt(), seat);
+        return hello;
     }
 
     List<Received> history() {

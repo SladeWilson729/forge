@@ -156,6 +156,10 @@
           "type": "string",
           "$comment": "forge-game/src/main/java/forge/game/card/CardView.java:1287"
         },
+        "types": {
+          "type": "string",
+          "$comment": "CardView.CardStateView.getType().toString(), CardView.java:1361. Same identity gating/state as name; an authorized viewer may see the alternate identity of a face-down card."
+        },
         "set": {
           "type": "string",
           "$comment": "forge-game/src/main/java/forge/game/card/CardView.java:1543"
@@ -274,6 +278,10 @@
       "properties": {
         "id": {
           "$ref": "#/$defs/CardRef"
+        },
+        "types": {
+          "type": "string",
+          "$comment": "Public current face-down CardStateView.getType() only (CardView.java:1361); never alternate/hidden identity. HiddenCard has no types."
         },
         "tapped": {
           "type": "boolean",
@@ -1227,6 +1235,10 @@
         },
         "seat": {
           "type": "integer"
+        },
+        "playerId": {
+          "$ref": "#/$defs/PlayerRef",
+          "$comment": "The Forge player resolved from this seat's RegisteredPlayer binding, not the wire seat index. Hello waits until binding is available."
         }
       },
       "required": [
@@ -1234,7 +1246,8 @@
         "seq",
         "protocolVersion",
         "serverVersion",
-        "seat"
+        "seat",
+        "playerId"
       ],
       "additionalProperties": true
     },

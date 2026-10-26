@@ -127,7 +127,6 @@ final class PromptGameHarness implements AutoCloseable {
         };
         useClient(client);
         client.connect(HttpClient.newHttpClient(), server.getPort(), "/ws?seat=" + humanSeat);
-        client.hello(humanSeat);
     }
 
     void useClient(WsTestClient transport) {
@@ -180,6 +179,7 @@ final class PromptGameHarness implements AutoCloseable {
             ownerId = human.getPlayer().getId();
             controller = gui.getGameController(human.getPlayer().getView()); return null;
         });
+        assertEquals(client.hello(humanSeat).get("playerId").getAsInt(), ownerId);
         advance(input -> configured.getCount() == 0 && input instanceof InputPassPriority
                 && game.getPhaseHandler().getPlayerTurn() == human.getPlayer()
                 && game.getPhaseHandler().getPhase() == PhaseType.MAIN1);

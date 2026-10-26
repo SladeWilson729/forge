@@ -1,16 +1,20 @@
 package forge.arena.server;
 
+import com.google.common.eventbus.Subscribe;
 import forge.deck.Deck;
 import forge.deck.DeckSection;
 import forge.game.Game;
 import forge.game.GameType;
 import forge.game.GameView;
 import forge.game.card.CardView;
+import forge.game.event.GameEventTurnBegan;
 import forge.game.phase.PhaseType;
 import forge.game.player.PlayerView;
+import forge.game.player.Player;
 import forge.game.player.RegisteredPlayer;
 import forge.game.spellability.SpellAbilityView;
 import forge.gamemodes.match.HostedMatch;
+import forge.gamemodes.match.Selection;
 import forge.gamemodes.net.IRemote;
 import forge.gamemodes.net.ProtocolMethod;
 import forge.gamemodes.net.event.GuiGameEvent;
@@ -23,6 +27,7 @@ import forge.localinstance.properties.ForgePreferences.FPref;
 import forge.model.FModel;
 import forge.player.GamePlayerUtil;
 import forge.player.LobbyPlayerHuman;
+import forge.player.PlayerControllerHuman;
 import forge.trackable.TrackableCollection;
 import forge.util.MyRandom;
 import org.testng.annotations.Test;
@@ -45,9 +50,31 @@ import static org.testng.Assert.fail;
 
 /** A real human controller and three AIs play Commander through an in-process seat bridge. */
 public class SeatBridgeSmokeTest {
+    /** Finish on Forge's game thread; this transport test does not depend on AI combat decisions. */
+    public static final class Stopper {
+        private final List<Player> bots;
+        private boolean conceded;
+
+        Stopper(final List<Player> bots) {
+            this.bots = bots;
+        }
+
+        @Subscribe
+        public void onTurn(final GameEventTurnBegan event) {
+            if (event.turnNumber() >= 12 && !conceded) {
+                conceded = true;
+                System.out.println("[bridge] AI concessions at turn " + event.turnNumber()
+                        + " on " + Thread.currentThread().getName());
+                for (final Player bot : bots) {
+                    bot.concede();
+                }
+            }
+        }
+    }
+
     private static final class RecordingRemote implements IRemote {
         private final Set<ProtocolMethod> methods = ConcurrentHashMap.newKeySet();
-        private final BlockingQueue<GuiGameEvent> buttonPrompts = new LinkedBlockingQueue<>();
+        private final BlockingQueue<GuiGameEvent> displays = new LinkedBlockingQueue<>();
         private volatile TrackableCollection<PlayerView> myPlayers;
         volatile String unscripted;
 
@@ -64,7 +91,11 @@ public class SeatBridgeSmokeTest {
             record(guiEvent);
             switch (guiEvent.getMethod()) {
                 case openView -> myPlayers = (TrackableCollection<PlayerView>) guiEvent.getObjects()[0];
-                case updateButtons -> buttonPrompts.offer(guiEvent);
+                case updateButtons -> {
+                    System.out.println("[bridge-buttons] " + java.util.Arrays.toString(guiEvent.getObjects()));
+                    displays.offer(guiEvent);
+                }
+                case setSelection -> displays.offer(guiEvent);
                 default -> { }
             }
         }
@@ -115,17 +146,32 @@ public class SeatBridgeSmokeTest {
         return deck;
     }
 
-    @Test(timeOut = 300_000)
+    @Test(timeOut = 120_000)
     public void commanderGameRunsThroughSeatBridge() throws Exception {
         ArenaServerMain.initializeForge();
-        FModel.getPreferences().setPref(FPref.UI_SHOW_ACTIONABLE_HIGHLIGHTS, false);
+        final boolean highlights = Boolean.parseBoolean(System.getProperty("arena.smokeHighlights", "true"));
+        FModel.getPreferences().setPref(FPref.UI_SHOW_ACTIONABLE_HIGHLIGHTS, highlights);
         FModel.getPreferences().setPref(FPref.UI_RECORD_REPLAYS, false);
         MyRandom.setRandom(new Random(7));
 
         final RecordingRemote remote = new RecordingRemote();
-        final SeatProtocolGui gui = new SeatProtocolGui(remote);
+        final HighlightProbe timings = new HighlightProbe();
+        final SeatProtocolGui gui = new SeatProtocolGui(remote) {
+            @Override public void setWeaklySelectable(Iterable<CardView> cards) {
+                timings.timed("setWeaklySelectable", () -> super.setWeaklySelectable(cards));
+            }
+            @Override public void clearWeaklySelectable() {
+                timings.timed("clearWeaklySelectable", super::clearWeaklySelectable);
+            }
+        };
         final RegisteredPlayer human = RegisteredPlayer.forCommander(commanderDeck("Bridge Human"))
-                .setPlayer(new LobbyPlayerHuman("Bridge Human"));
+                .setPlayer(new LobbyPlayerHuman("Bridge Human") {
+                    @Override public Player createIngamePlayer(Game game, int id) {
+                        Player player = new Player(forge.util.GuiDisplayUtil.personalizeHuman(getName()), game, id);
+                        player.setFirstController(timings.controller(game, player, this));
+                        return player;
+                    }
+                });
         final List<RegisteredPlayer> players = new ArrayList<>();
         players.add(human);
         for (int i = 1; i <= 3; i++) {
@@ -135,9 +181,25 @@ public class SeatBridgeSmokeTest {
 
         final HostedMatch match = GuiBase.getInterface().hostMatch();
         final CountDownLatch finished = new CountDownLatch(1);
-        match.setEndGameHook(finished::countDown);
+        match.setStartGameHook(() -> {
+            final Game running = match.getGame();
+            running.getRules().setGamesPerMatch(1);
+            // Capture the registered AI identities before concessions remove any players.
+            final List<Player> bots = players.subList(1, 4).stream()
+                    .map(registered -> ArenaServerMain.playerFor(running, registered)).toList();
+            running.subscribeToEvents(new Stopper(bots));
+        });
+        match.setEndGameHook(() -> {
+            // HostedMatch calls this hook BEFORE its final forwarder flush. Drain on
+            // the game thread before test cleanup can collect those same deltas.
+            gui.getForwarder().flush();
+            gui.updateGameView();
+            finished.countDown();
+        });
         match.startMatch(GameType.Commander, EnumSet.of(GameType.Commander), players, human, gui);
         final Game game = match.getGame();
+        final long started = System.nanoTime();
+        long nextProgress = started;
         int lastLandTurn = -1;
         boolean sawLandOnBattlefield = false;
         boolean sawCommander = false;
@@ -145,15 +207,42 @@ public class SeatBridgeSmokeTest {
         try {
             assertEquals(game.getPlayers().size(), 4);
             assertTrue(game.getRules().hasCommander());
-            final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(180);
+            // Highlights measured 2.116 ms median scan + push (off: 0.252 ms).
+            // End at turn 12 instead of depending on these synthetic decks attacking.
+            final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120);
             while (!game.isGameOver() && System.nanoTime() < deadline) {
                 if (remote.unscripted != null) fail("Unscripted blocking call: " + remote.unscripted);
-                final GuiGameEvent buttons = remote.buttonPrompts.poll(100, TimeUnit.MILLISECONDS);
+                if (System.nanoTime() >= nextProgress) {
+                    nextProgress += TimeUnit.SECONDS.toNanos(10);
+                    FThreads.invokeInEdtLater(() -> {
+                        PlayerControllerHuman controller = (PlayerControllerHuman) ArenaServerMain.playerFor(game, human).getController();
+                        System.out.printf("[bridge-progress] highlights=%s elapsed=%ds turn=%d phase=%s input=%s%n",
+                                highlights, TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - started),
+                                gui.getGameView().getTurn(), gui.getGameView().getPhase(), controller.getInputQueue().printInputStack());
+                    });
+                }
+                final GuiGameEvent buttons = remote.displays.poll(100, TimeUnit.MILLISECONDS);
                 if (buttons == null) {
+                    continue;
+                }
+                if (buttons.getMethod() == ProtocolMethod.setSelection) {
+                    final Selection selection = (Selection) buttons.getObjects()[0];
+                    // Winning the multiplayer coin toss opens an Input with BOTH buttons
+                    // disabled until a player is picked. The old button-only driver stalled.
+                    if (gui.getGameView().getTurn() == 0 && selection.min() == 1 && selection.max() == 1
+                            && selection.chosen().isEmpty() && !selection.targets().isEmpty()) {
+                        final PlayerView owner = remote.myPlayers.get(0);
+                        assertTrue(selection.targets().contains(owner), "Starting-player input offers the human");
+                        FThreads.invokeInEdtLater(() -> {
+                            System.out.println("[bridge] Selecting human as starting player on " + Thread.currentThread().getName());
+                            gui.getGameController(owner).selectPlayer(owner, null);
+                        });
+                    }
                     continue;
                 }
                 final PlayerView owner = (PlayerView) buttons.getObjects()[0];
                 if (remote.myPlayers == null || owner == null || !remote.myPlayers.contains(owner)) {
+                    System.out.println("[bridge] Ignored button owner=" + owner + " myPlayers=" + remote.myPlayers);
                     continue;
                 }
                 sawCommander |= !owner.getCommand().isEmpty();
@@ -172,7 +261,7 @@ public class SeatBridgeSmokeTest {
                 }
             }
 
-            assertTrue(game.isGameOver(), "Commander game ended within 180 seconds");
+            assertTrue(game.isGameOver(), "Commander game ended within 120 seconds");
             assertTrue(finished.await(10, TimeUnit.SECONDS), "HostedMatch completed the game");
             assertNotNull(game.getOutcome());
             assertNotNull(game.getOutcome().getWinningLobbyPlayer(), "The game has a winner");
@@ -185,8 +274,13 @@ public class SeatBridgeSmokeTest {
                     ProtocolMethod.applyDelta, ProtocolMethod.updateButtons)), "State and prompts crossed the bridge");
             System.out.println("[bridge] Winner: " + game.getOutcome().getWinningLobbyPlayer().getName());
         } finally {
-            match.endCurrentGame();
-            System.out.println("[bridge] ProtocolMethods seen: " + remote.methods.stream().sorted().toList());
+            try {
+                FThreads.invokeInEdtAndWait(match::endCurrentGame);
+            } finally {
+                System.out.printf("[bridge] highlights=%s elapsed=%.3fs%n", highlights, (System.nanoTime() - started) / 1_000_000_000.0);
+                timings.reportTotals();
+                System.out.println("[bridge] ProtocolMethods seen: " + remote.methods.stream().sorted().toList());
+            }
         }
     }
 }

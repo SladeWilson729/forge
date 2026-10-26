@@ -50,6 +50,8 @@ public class HiddenInfoSnapshotTest {
     private static void visible(final JsonObject object, final Card card) {
         assertEquals(object.get("id").getAsInt(), card.getId());
         assertEquals(object.get("name").getAsString(), card.getPaperCard().getName());
+        assertEquals(object.get("types").getAsString(), (card.isFaceDown()
+                ? card.getView().getAlternateState() : card.getView().getCurrentState()).getType().toString());
         assertEquals(object.get("set").getAsString(), card.getPaperCard().getEdition());
         assertEquals(object.get("num").getAsString(), card.getPaperCard().getCollectorNumber());
         assertFalse(object.has("hidden"));
@@ -150,6 +152,10 @@ public class HiddenInfoSnapshotTest {
                     visible(object, card);
                 } else {
                     assertTrue(object.get("id").getAsString().matches("h-[0-9a-f]{12}"));
+                    assertEquals(object.get("types").getAsString(), card.getView().getCurrentState().getType().toString());
+                    assertEquals(object.get("types").getAsString(), "Creature");
+                    assertNotEquals(object.get("types").getAsString(), card.getView().getAlternateState().getType().toString(),
+                            "Dinosaur/Human Wizard identity types must not leak through a face-down card");
                     assertFalse(object.has("name") || object.has("set") || object.has("num"));
                     noIdentity(states[seat], card);
                     assertFalse(scenario.ids[seat].resolve(card.getId()).isPresent());

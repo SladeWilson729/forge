@@ -25,7 +25,8 @@ public final class SeatWriter implements AutoCloseable {
     private final ConcurrentLinkedQueue<String> ioMessages = new ConcurrentLinkedQueue<>();
     private volatile JsonSeatRemote remote;
     private final Thread thread;
-    private final String hello;
+    private final int seat;
+    private volatile String hello;
     private Outbound pendingState;
     private long sequence;
     private volatile boolean closed;
@@ -36,6 +37,14 @@ public final class SeatWriter implements AutoCloseable {
     private long nextStateAt;
 
     public SeatWriter(final int seat) {
+        this.seat = seat;
+        thread = new Thread(this::run, "Arena-seat-writer-" + seat);
+        thread.setDaemon(true);
+        thread.start();
+    }
+
+    /** Forge-safe caller supplies only the resolved player id; writer/I/O never reads Forge. */
+    void bindPlayer(final int playerId) {
         final JsonObject greeting = new JsonObject();
         greeting.addProperty("type", "hello");
         // Connection preamble precedes cached messages; normal seat sequencing starts at 1.
@@ -43,10 +52,9 @@ public final class SeatWriter implements AutoCloseable {
         greeting.addProperty("protocolVersion", 1);
         greeting.addProperty("serverVersion", "1.4-dev");
         greeting.addProperty("seat", seat);
+        greeting.addProperty("playerId", playerId);
         hello = WsServer.GSON.toJson(greeting);
-        thread = new Thread(this::run, "Arena-seat-writer-" + seat);
-        thread.setDaemon(true);
-        thread.start();
+        LockSupport.unpark(thread);
     }
 
     /** Serialize on the calling Forge-safe thread. The short leaf lock never calls Forge or Netty. */
@@ -121,7 +129,9 @@ public final class SeatWriter implements AutoCloseable {
             String ioMessage;
             while ((ioMessage = ioMessages.poll()) != null) send(JsonParser.parseString(ioMessage).getAsJsonObject());
             Channel connected;
-            while ((connected = connections.poll()) != null) {
+            // Startup connections remain queued until RegisteredPlayer has a real Forge id.
+            // No socket output can precede the bound hello; no I/O thread waits for it.
+            while (hello != null && (connected = connections.poll()) != null) {
                 if (channel != null && channel != connected) {
                     channel.writeAndFlush(new CloseWebSocketFrame(1000, "Replaced by a new connection for this seat"))
                             .addListener(ChannelFutureListener.CLOSE);

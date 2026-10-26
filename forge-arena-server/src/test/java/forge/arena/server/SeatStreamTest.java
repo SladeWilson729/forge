@@ -150,8 +150,6 @@ public class SeatStreamTest {
             final HttpClient http = HttpClient.newBuilder().executor(executor).connectTimeout(Duration.ofSeconds(5)).build();
             zero.connect(http, server.getPort(), "/ws?seat=0");
             two.connect(http, server.getPort(), "/ws?seat=2");
-            zero.hello(0);
-            two.hello(2);
             final List<RegisteredPlayer> players = new ArrayList<>();
             for (int seat = 0; seat < 4; seat++) {
                 players.add(RegisteredPlayer.forCommander(deck("Stream " + seat))
@@ -160,6 +158,8 @@ public class SeatStreamTest {
             match.startMatch(GameType.Commander, EnumSet.of(GameType.Commander), players, Collections.emptyMap());
             final Game game = match.getGame();
             final int ownerZero = game.getPlayers().get(0).getId();
+            assertEquals(zero.hello(0).get("playerId").getAsInt(), ownerZero);
+            assertEquals(two.hello(2).get("playerId").getAsInt(), game.getPlayers().get(2).getId());
             assertTrue(finished.await(120, TimeUnit.SECONDS), "Four AIs finished within 120 seconds");
             assertTrue(game.isGameOver());
             assertEquals(game.getRules().getGamesPerMatch(), 1);

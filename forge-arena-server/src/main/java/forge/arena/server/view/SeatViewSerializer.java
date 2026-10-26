@@ -198,11 +198,16 @@ public final class SeatViewSerializer {
                         ? Objects.requireNonNull(view.getAlternateState(), "Face-down card has no identity state")
                         : current;
                 result.addProperty("name", identity.getName());
+                result.addProperty("types", identity.getType().toString());
                 result.addProperty("set", identity.getSetCode());
                 final IPaperCard paper = live == null ? null : live.getPaperCard();
                 if (paper != null) {
                     result.addProperty("num", paper.getCollectorNumber());
                 }
+            } else {
+                // Public face-down characteristics only. Never inspect the alternate face
+                // unless CardVisibility grants identity, exactly as for name above.
+                result.addProperty("types", current.getType().toString());
             }
             result.addProperty("tapped", view.isTapped());
             result.addProperty("sick", view.isSick());

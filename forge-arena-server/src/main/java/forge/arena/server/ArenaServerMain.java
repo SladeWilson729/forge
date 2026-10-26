@@ -45,6 +45,7 @@ public final class ArenaServerMain {
         FModel.initialize(null, preferences -> {
             preferences.setPref(FPref.LOAD_CARD_SCRIPTS_LAZILY, false);
             preferences.setPref(FPref.UI_LANGUAGE, "en-US");
+            preferences.setPref(FPref.UI_SHOW_ACTIONABLE_HIGHLIGHTS, true);
             return null;
         });
     }

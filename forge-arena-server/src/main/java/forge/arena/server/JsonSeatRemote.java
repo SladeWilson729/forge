@@ -80,6 +80,7 @@ public final class JsonSeatRemote implements IRemote {
         this.writer = writer;
         this.match = null;
         this.registeredPlayer = null;
+        if (seat != null) writer.bindPlayer(seat.getId());
         actionRouter = new ActionRouter(this, false, writer);
         writer.attachRemote(this);
     }
@@ -220,6 +221,7 @@ public final class JsonSeatRemote implements IRemote {
                 // HostedMatch sorts humans first; wire seat numbers are never game-list indexes.
                 seat = ArenaServerMain.playerFor(running, registeredPlayer).getView();
                 game = running;
+                writer.bindPlayer(seat.getId());
             }
             // Inline, on Forge's safe caller (plan 2.2 rule 1). Serializer owns the shared
             // CardVisibility/IdMapper policy; never reconstruct visibility in the transport.

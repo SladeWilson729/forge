@@ -32,8 +32,15 @@ public class WsServerTest {
                     .connectTimeout(Duration.ofSeconds(5)).build();
             first.connect(http, server.getPort(), "/ws?seat=0");
             otherSeat.connect(http, server.getPort(), "/ws?seat=2");
-            first.hello(0);
-            otherSeat.hello(2);
+            final var premature = new java.util.concurrent.CountDownLatch(1);
+            first.onMessage = ignored -> premature.countDown();
+            assertFalse(premature.await(200, TimeUnit.MILLISECONDS), "No hello before the player is bound");
+            assertTrue(first.history().isEmpty());
+            // Model human-first sorting: player ids are intentionally not wire seat numbers.
+            server.writer(0).bindPlayer(2);
+            server.writer(2).bindPlayer(0);
+            assertEquals(first.hello(0).get("playerId").getAsInt(), 2);
+            assertEquals(otherSeat.hello(2).get("playerId").getAsInt(), 0);
             final JsonObject zero = state("Urza's Tower");
             final JsonObject two = state("Seat two only");
             server.writer(0).send(zero);
@@ -42,7 +49,7 @@ public class WsServerTest {
             assertEquals(first.receive(), zero);
             assertEquals(otherSeat.receive(), two);
             second.connect(http, server.getPort(), "/ws?seat=0");
-            second.hello(0);
+            assertEquals(second.hello(0).get("playerId").getAsInt(), 2);
             assertEquals(second.receive(), zero);
             assertTrue(first.closed.await(5, TimeUnit.SECONDS));
             assertEquals(first.closeCode, 1000);
@@ -88,6 +95,7 @@ public class WsServerTest {
         final WsServer server = new WsServer("127.0.0.1", 0);
         final ExecutorService executor = Executors.newCachedThreadPool();
         try (WsTestClient client = new WsTestClient()) {
+            server.writer(3).bindPlayer(1);
             server.start();
             // Queue non-state messages while offline. Coalescing must not lose or reorder them.
             for (int i = 0; i < 25; i++) {

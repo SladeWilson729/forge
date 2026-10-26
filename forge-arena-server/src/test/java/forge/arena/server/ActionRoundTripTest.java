@@ -106,11 +106,15 @@ public class ActionRoundTripTest {
                 assertFalse(ArenaServerMain.playerFor(h.game, h.players.get(0)).getController() instanceof forge.player.PlayerControllerHuman);
                 return null;
             });
-            bot.connect(HttpClient.newHttpClient(), h.server.getPort(), "/ws?seat=0"); bot.hello(0);
+            bot.connect(HttpClient.newHttpClient(), h.server.getPort(), "/ws?seat=0");
+            JsonObject botHello = bot.hello(0);
             JsonObject botState = bot.receive(); PromptAssertions.validate(botState, "state");
             assertEquals(botState.getAsJsonObject("activeInput").get("kind").getAsString(), "waiting");
             int botId = PromptGameHarness.edt(() -> ArenaServerMain.playerFor(h.game, h.players.get(0)).getId());
             int humanId = PromptGameHarness.edt(() -> h.human.getPlayer().getId());
+            assertEquals(botHello.get("playerId").getAsInt(), botId);
+            assertNotEquals(humanId, h.humanSeat, "Human-first sorting differs from wire seat 2");
+            assertNotEquals(botId, 0, "Bot seat 0 was sorted after the human");
             for (JsonElement p : botState.getAsJsonArray("players")) {
                 JsonObject player = p.getAsJsonObject();
                 JsonArray hand = player.getAsJsonObject("zones").getAsJsonArray("hand");
