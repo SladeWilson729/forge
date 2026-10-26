@@ -146,7 +146,7 @@ public final class WsServer implements AutoCloseable {
                 final JsonObject message = JsonParser.parseString(frame.text()).getAsJsonObject();
                 if (message.has("type") && "promptReply".equals(message.get("type").getAsString())) {
                     writer(seat).promptReply(message);
-                }
+                } else writer(seat).action(message);
             } catch (RuntimeException ex) {
                 final JsonObject rejected = new JsonObject();
                 rejected.addProperty("type", "message"); rejected.addProperty("level", "rejected");

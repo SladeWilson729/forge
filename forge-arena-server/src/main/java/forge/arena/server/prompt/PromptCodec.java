@@ -205,6 +205,14 @@ public final class PromptCodec {
         return prompt;
     }
 
+    /** Same E5 identity policy for non-dialog Input offers; the caller scopes the ref to that Input. */
+    public static JsonObject offeredCard(CardView card, Context context, Object wireRef) {
+        JsonObject option = new JsonObject();
+        JsonElement ref = wireRef instanceof Integer id ? new JsonPrimitive(id) : new JsonPrimitive((String) wireRef);
+        cardIdentity(option, card, true, context, new HashMap<>(Map.of(card.getId(), ref)));
+        return option;
+    }
+
     private static void cardIdentity(JsonObject option, CardView card, boolean defaultLabel,
                                      Context context, Map<Integer, JsonElement> refs) {
         if (card == null) return;

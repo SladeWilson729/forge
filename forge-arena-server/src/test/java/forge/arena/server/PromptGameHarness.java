@@ -46,6 +46,17 @@ final class PromptGameHarness implements AutoCloseable {
     Game game;
     PlayerControllerHuman human;
     IGameController controller;
+    final boolean socketActions;
+    final int humanSeat;
+    final List<RegisteredPlayer> players = new ArrayList<>();
+    private final forge.arena.server.view.ActiveInputTracker classifier = new forge.arena.server.view.ActiveInputTracker();
+    private volatile boolean handSettled;
+    private volatile int ownerId;
+    java.util.function.Consumer<Game> extraSetup = g -> { };
+    java.util.function.Consumer<List<String>> scenarioLines = lines -> { };
+    private long clientSequence;
+    private volatile JsonObject receivedState;
+    final List<SeatProtocolGui> botViews = new ArrayList<>();
 
     static void initialize() {
         ArenaServerMain.initializeForge();
@@ -55,9 +66,25 @@ final class PromptGameHarness implements AutoCloseable {
     }
 
     PromptGameHarness() throws Exception {
+        this(false);
+    }
+
+    PromptGameHarness(boolean socketActions) throws Exception {
+        this(socketActions, 0);
+    }
+
+    PromptGameHarness(boolean socketActions, int humanSeat) throws Exception {
+        this.socketActions = socketActions;
+        this.humanSeat = humanSeat;
         MyRandom.setRandom(new Random(7));
+        for (int i = 0; i < 4; i++) {
+            Deck deck = new Deck("Prompt " + i); deck.getMain().add("Plains", 99);
+            deck.getOrCreate(DeckSection.Commander).add("Isamaru, Hound of Konda", 1);
+            players.add(RegisteredPlayer.forCommander(deck).setPlayer(i == humanSeat
+                    ? new LobbyPlayerHuman("Prompt human") : GamePlayerUtil.createAiPlayer("Prompt AI " + i)));
+        }
         server.start();
-        remote = new JsonSeatRemote(match, 0, server.writer(0));
+        remote = new JsonSeatRemote(match, players.get(humanSeat), server.writer(humanSeat));
         gui = new SeatProtocolGui(new IRemote() {
             public void send(NetEvent event) {
                 long before = remote.getLastFullSnapshotSequence();
@@ -99,8 +126,8 @@ final class PromptGameHarness implements AutoCloseable {
             }
         };
         useClient(client);
-        client.connect(HttpClient.newHttpClient(), server.getPort(), "/ws?seat=0");
-        client.hello(0);
+        client.connect(HttpClient.newHttpClient(), server.getPort(), "/ws?seat=" + humanSeat);
+        client.hello(humanSeat);
     }
 
     void useClient(WsTestClient transport) {
@@ -108,7 +135,11 @@ final class PromptGameHarness implements AutoCloseable {
         clients.add(transport);
         transport.onMessage = message -> {
             String type = message.get("type").getAsString();
-            if (type.equals("state")) PromptAssertions.validate(message, "state");
+            if (type.equals("state")) {
+                PromptAssertions.validate(message, "state");
+                if (handSettled) assertOwnHandVisible(message);
+                receivedState = message;
+            }
             if (!type.equals("prompt")) return;
             PromptAssertions.validate(message, "prompt");
             System.out.println("[prompt-test] client received " + message);
@@ -135,26 +166,41 @@ final class PromptGameHarness implements AutoCloseable {
                     lines.add(p + "command=Isamaru, Hound of Konda|IsCommander");
                     lines.add(p + "graveyard="); lines.add(p + "exile=");
                 }
+                scenarioLines.accept(lines);
                 GameState state = new GameState(); state.parse(lines); state.applyToGame(running);
+                extraSetup.accept(running);
+                if (socketActions) botViews.addAll(ArenaServerMain.attachBotSeatViews(match, server, players));
             } catch (Throwable ex) { failure.compareAndSet(null, ex); }
             finally { configured.countDown(); }
         });
         match.setEndGameHook(finished::countDown);
-        List<RegisteredPlayer> players = new ArrayList<>();
-        for (int i = 0; i < 4; i++) {
-            Deck deck = new Deck("Prompt " + i); deck.getMain().add("Plains", 99);
-            deck.getOrCreate(DeckSection.Commander).add("Isamaru, Hound of Konda", 1);
-            players.add(RegisteredPlayer.forCommander(deck).setPlayer(i == 0
-                    ? new LobbyPlayerHuman("Prompt human") : GamePlayerUtil.createAiPlayer("Prompt AI " + i)));
-        }
         edt(() -> {
-            match.startMatch(GameType.Commander, EnumSet.of(GameType.Commander), players, Map.of(players.get(0), gui));
-            game = match.getGame(); human = (PlayerControllerHuman) game.getPlayers().get(0).getController();
+            match.startMatch(GameType.Commander, EnumSet.of(GameType.Commander), players, Map.of(players.get(humanSeat), gui));
+            game = match.getGame(); human = (PlayerControllerHuman) ArenaServerMain.playerFor(game, players.get(humanSeat)).getController();
+            ownerId = human.getPlayer().getId();
             controller = gui.getGameController(human.getPlayer().getView()); return null;
         });
         advance(input -> configured.getCount() == 0 && input instanceof InputPassPriority
                 && game.getPhaseHandler().getPlayerTurn() == human.getPlayer()
                 && game.getPhaseHandler().getPhase() == PhaseType.MAIN1);
+        if (socketActions) {
+            // Read actions from the received, settled puzzle state, never the previous opening hand.
+            until(() -> {
+                JsonObject state = receivedState;
+                if (state == null) return false;
+                JsonObject zones = ownPlayer(state).getAsJsonObject("zones");
+                for (ZoneType zone : List.of(ZoneType.Hand, ZoneType.Battlefield)) {
+                    JsonArray cards = zones.getAsJsonArray(zone == ZoneType.Hand ? "hand" : "battlefield");
+                    for (Card card : human.getPlayer().getCardsIn(zone)) {
+                        if (cards.asList().stream().noneMatch(e -> e.getAsJsonObject().has("name")
+                                && e.getAsJsonObject().get("id").equals(new JsonPrimitive(card.getId())))) return false;
+                    }
+                }
+                return true;
+            }, "settled identity-visible hand and battlefield at client");
+            handSettled = true;
+            assertOwnHandVisible(receivedState);
+        }
     }
 
     Card card(String name, ZoneType zone) {
@@ -164,7 +210,44 @@ final class PromptGameHarness implements AutoCloseable {
 
     boolean ready(Input input) {
         return input != null && parked.stream().anyMatch(l -> l.getCount() > 0)
+                && (!socketActions || clientKind().equals(classifier.classify(input)))
+                // The latch is parked before InputProxy posts showMessageInitial. A socket
+                // client must see the complete mulligan prompt before sending Keep; otherwise
+                // SeatWriter can legitimately coalesce that unseen state into main phase.
+                && (!(input instanceof InputConfirmMulligan) || mulliganDisplayed(socketActions ? receivedState : remote.getLatestState()))
                 && (!(input instanceof InputPayMana pay) || !pay.isActivatingManaAbility());
+    }
+
+    JsonObject clientState() { return receivedState; }
+
+    String clientKind() {
+        JsonObject state = receivedState;
+        return state == null ? "" : state.getAsJsonObject("activeInput").get("kind").getAsString();
+    }
+
+    void waitClientKind(String kind) throws Exception {
+        until(() -> kind.equals(clientKind()) && ready(human.getInputQueue().getInput()), "client Input " + kind);
+    }
+
+    private JsonObject ownPlayer(JsonObject state) {
+        return state.getAsJsonArray("players").asList().stream().map(JsonElement::getAsJsonObject)
+                .filter(p -> p.get("id").getAsInt() == ownerId).findFirst().orElseThrow();
+    }
+
+    private void assertOwnHandVisible(JsonObject state) {
+        for (JsonElement card : ownPlayer(state).getAsJsonObject("zones").getAsJsonArray("hand")) {
+            assertTrue(card.getAsJsonObject().has("name") && card.getAsJsonObject().get("id").getAsJsonPrimitive().isNumber(),
+                    "Settled own hand must never be HiddenCard: " + state);
+        }
+    }
+
+    static boolean mulliganDisplayed(JsonObject state) {
+        if (state == null) return false;
+        JsonObject input = state.getAsJsonObject("activeInput");
+        return "mulligan".equals(input.get("kind").getAsString()) && input.has("prompt")
+                && input.get("prompt").getAsString().contains(forge.util.Localizer.getInstance().getMessage("lblDoYouWantToKeepYourHand"))
+                && input.has("okLabel") && !input.get("okLabel").getAsString().isBlank()
+                && input.has("buttons");
     }
 
     void advance(Predicate<Input> target) throws Exception {
@@ -176,12 +259,23 @@ final class PromptGameHarness implements AutoCloseable {
             if (last.get() == input) return false;
             if (configured.getCount() > 0 && input instanceof InputSelectEntitiesFromList<?> entities
                     && entities.getValidChoices().contains(human.getPlayer())) {
-                last.set(input); controller.selectPlayer(human.getPlayer().getView(), null);
+                last.set(input);
+                if (socketActions) sendAction("selectPlayer", "playerId", new JsonPrimitive(human.getPlayer().getId()));
+                else controller.selectPlayer(human.getPlayer().getView(), null);
             } else if (input instanceof InputPassPriority || input instanceof InputConfirmMulligan) {
-                last.set(input); controller.selectButtonOk();
+                last.set(input); if (socketActions) sendAction("ok"); else controller.selectButtonOk();
             }
             return false;
         }, "advance to next Input");
+    }
+
+    JsonObject sendAction(String type, Object... fields) {
+        JsonObject message = new JsonObject(); message.addProperty("type", type);
+        message.addProperty("clientSeq", ++clientSequence);
+        JsonObject observed = receivedState;
+        message.addProperty("baseSeq", observed == null ? 0 : observed.get("seq").getAsLong());
+        for (int i = 0; i < fields.length; i += 2) message.add((String) fields[i], (JsonElement) fields[i + 1]);
+        PromptAssertions.validate(message, "ClientMessage"); client.send(message); return message;
     }
 
     void waitInput(Class<? extends Input> expected) throws Exception {

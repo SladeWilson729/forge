@@ -83,6 +83,7 @@ final class WsTestClient implements WebSocket.Listener, AutoCloseable {
 
     void hello(final int seat) throws InterruptedException {
         final JsonObject hello = receive();
+        PromptAssertions.validate(hello, "hello");
         assertEquals(hello.get("type").getAsString(), "hello");
         assertEquals(hello.get("protocolVersion").getAsInt(), 1);
         assertEquals(hello.get("serverVersion").getAsString(), "1.4-dev");
@@ -94,7 +95,11 @@ final class WsTestClient implements WebSocket.Listener, AutoCloseable {
     }
 
     void send(final JsonObject message) {
-        socket.sendText(WsServer.GSON.toJson(message), true)
+        sendRaw(WsServer.GSON.toJson(message));
+    }
+
+    void sendRaw(final String text) {
+        socket.sendText(text, true)
                 .whenComplete((ignored, ex) -> { if (ex != null) error = ex; });
     }
 

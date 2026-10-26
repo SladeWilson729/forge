@@ -213,7 +213,9 @@ public class CombatAndManaStateTest {
         server.start();
         final SeatWriter writer = server.writer(0);
         final WsTestClient client = new WsTestClient();
-        remote = new JsonSeatRemote(match, 0, writer);
+        final RegisteredPlayer owner = RegisteredPlayer.forCommander(deck("Step human"))
+                .setPlayer(new LobbyPlayerHuman("Step human"));
+        remote = new JsonSeatRemote(match, owner, writer);
         remote.setPromptResponder(this::answer);
         gui = new SeatProtocolGui(observe()) {
             @Override
@@ -242,8 +244,6 @@ public class CombatAndManaStateTest {
         });
         match.setEndGameHook(finished::countDown);
         final List<RegisteredPlayer> players = new ArrayList<>();
-        final RegisteredPlayer owner = RegisteredPlayer.forCommander(deck("Step human"))
-                .setPlayer(new LobbyPlayerHuman("Step human"));
         players.add(owner);
         for (int i = 1; i < 4; i++) {
             players.add(RegisteredPlayer.forCommander(deck("Step AI " + i))
@@ -544,6 +544,9 @@ public class CombatAndManaStateTest {
 
     private boolean ready(final Input input) {
         return input != null && parked.stream().anyMatch(latch -> latch.getCount() != 0)
+                // The Input latch may be parked before its EDT showMessageInitial runs.
+                // Keep only after the full prompt/buttons have actually been displayed.
+                && (!(input instanceof InputConfirmMulligan) || PromptGameHarness.mulliganDisplayed(remote.getLatestState()))
                 && (!(input instanceof InputPayMana pay) || !pay.isActivatingManaAbility());
     }
 

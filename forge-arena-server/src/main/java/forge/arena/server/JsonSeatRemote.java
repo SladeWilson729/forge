@@ -9,6 +9,7 @@ import forge.deck.CardPool;
 import forge.game.Game;
 import forge.game.GameEntityView;
 import forge.game.player.PlayerView;
+import forge.game.player.RegisteredPlayer;
 import forge.gamemodes.match.HostedMatch;
 import forge.gamemodes.match.input.Input;
 import forge.gamemodes.match.input.InputAttack;
@@ -42,7 +43,7 @@ public final class JsonSeatRemote implements IRemote {
     private Game game;
     private PlayerView seat;
     private final HostedMatch match;
-    private final int seatIndex;
+    private final RegisteredPlayer registeredPlayer;
     private final IdMapper ids = new IdMapper();
     private final SeatViewSerializer serializer = new SeatViewSerializer();
     private final ActiveInputTracker inputTracker = new ActiveInputTracker();
@@ -58,6 +59,9 @@ public final class JsonSeatRemote implements IRemote {
     private final AtomicLong displayCalls = new AtomicLong();
     private volatile PromptResponder promptResponder;
     private final PromptCodec promptCodec = new PromptCodec();
+    private final ActionRouter actionRouter;
+    private final java.util.Map<Integer, com.google.gson.JsonObject> inputOffers = new java.util.LinkedHashMap<>();
+    private final Set<Integer> diagnosedSources = ConcurrentHashMap.newKeySet();
     private static final class PendingPrompt {
         final PromptCodec.Prompt prompt;
         final CompletableFuture<Object> answer = new CompletableFuture<>();
@@ -66,20 +70,25 @@ public final class JsonSeatRemote implements IRemote {
     }
     private final ConcurrentHashMap<Integer, PendingPrompt> pending = new ConcurrentHashMap<>();
     private volatile String lastReplyThread;
+    private volatile java.util.Map<Integer, forge.game.spellability.SpellAbilityView> abilities = java.util.Map.of();
+
+    forge.game.spellability.SpellAbilityView offeredAbility(int id) { return abilities.get(id); }
 
     public JsonSeatRemote(final Game game, final PlayerView seat, final SeatWriter writer) {
         this.game = game;
         this.seat = seat;
         this.writer = writer;
         this.match = null;
-        this.seatIndex = -1;
+        this.registeredPlayer = null;
+        actionRouter = new ActionRouter(this, false, writer);
         writer.attachRemote(this);
     }
 
-    public JsonSeatRemote(final HostedMatch match, final int seatIndex, final SeatWriter writer) {
+    public JsonSeatRemote(final HostedMatch match, final RegisteredPlayer registeredPlayer, final SeatWriter writer) {
         this.match = Objects.requireNonNull(match);
-        this.seatIndex = seatIndex;
+        this.registeredPlayer = Objects.requireNonNull(registeredPlayer);
         this.writer = writer;
+        actionRouter = new ActionRouter(this, true, writer);
         writer.attachRemote(this);
     }
 
@@ -121,8 +130,9 @@ public final class JsonSeatRemote implements IRemote {
                 message.addProperty("type", "attention");
                 writer.send(message);
             }
+            case flashIncorrectAction -> actionRouter.reject("Forge rejected that action");
             default -> LOG.log(System.Logger.Level.DEBUG, "Seat {0}: {1}",
-                    seat == null ? seatIndex : seat.getId(), gui.getMethod());
+                    seat == null ? "unbound" : seat.getId(), gui.getMethod());
         }
     }
 
@@ -142,6 +152,7 @@ public final class JsonSeatRemote implements IRemote {
             if (input instanceof InputAttack && game.getCombat() != null) {
                 game.getCombat().getDefenders().forEach(entity -> defenders.add(GameEntityView.get(entity)));
             }
+            updateOffers(event, kind);
         } else {
             final String thread = Thread.currentThread().getName();
             if (unexpectedDisplayThreads.add(thread + ":" + event.getMethod())) {
@@ -162,6 +173,39 @@ public final class JsonSeatRemote implements IRemote {
         }
     }
 
+    /** Forge-safe display caller only. Offers never grant another seat visibility. */
+    private void updateOffers(GuiGameEvent event, String kind) {
+        if (game == null || seat == null) return;
+        if ("waiting".equals(kind) || event.getMethod() == forge.gamemodes.net.ProtocolMethod.awaitNextInput) {
+            inputOffers.clear(); ids.retainOffers(Set.of());
+        } else if (event.getMethod() == forge.gamemodes.net.ProtocolMethod.setSelection) {
+            final var selection = (forge.gamemodes.match.Selection) event.getObjects()[0];
+            inputOffers.clear();
+            for (var card : selection.cards()) addOffer(card);
+            ids.retainOffers(inputOffers.keySet());
+        } else if (event.getMethod() == forge.gamemodes.net.ProtocolMethod.showPromptMessage
+                && event.getObjects()[2] instanceof forge.game.card.CardView card && ids.currentRef(card.getId()).isEmpty()) {
+            if (diagnosedSources.add(card.getId())) LOG.log(System.Logger.Level.INFO,
+                    "[input-source] id={0} name={1} zone={2} kind={3}", card.getId(), card.getName(), card.getZone(), kind);
+            addOffer(card);
+        }
+        com.google.gson.JsonArray offers = new com.google.gson.JsonArray();
+        inputOffers.values().forEach(offers::add);
+        inputTracker.setOffered(offers);
+    }
+
+    private void addOffer(forge.game.card.CardView card) {
+        boolean visible = !card.isFaceDown() || forge.arena.server.view.CardVisibility.forSeat(card, seat).identityVisible();
+        Object ref = ids.offer(card.getId(), String.valueOf(card.getZone()), card.isFaceDown(), visible);
+        inputOffers.put(card.getId(), PromptCodec.offeredCard(card, new PromptCodec.Context(game, seat, ids), ref));
+    }
+
+    void action(com.google.gson.JsonObject message) { actionRouter.accept(message); }
+    long completedActionCount() { return actionRouter.completedCount(); }
+    Game actionGame() { return game; } // EDT only
+    PlayerView actionSeat() { return seat; } // EDT only
+    boolean hasPendingPrompt() { return !pending.isEmpty(); }
+
     private void publish(final JsonObject state) {
         final long seq = writer.send(state);
         latestState = state;
@@ -171,9 +215,11 @@ public final class JsonSeatRemote implements IRemote {
     private void snapshot() {
         synchronized (stateLock) { buildingSnapshot = true; }
         try {
-            if (game == null) {
-                game = Objects.requireNonNull(match.getGame());
-                seat = game.getPlayers().get(seatIndex).getView();
+            if (match != null && game != match.getGame()) {
+                final Game running = Objects.requireNonNull(match.getGame());
+                // HostedMatch sorts humans first; wire seat numbers are never game-list indexes.
+                seat = ArenaServerMain.playerFor(running, registeredPlayer).getView();
+                game = running;
             }
             // Inline, on Forge's safe caller (plan 2.2 rule 1). Serializer owns the shared
             // CardVisibility/IdMapper policy; never reconstruct visibility in the transport.
@@ -188,7 +234,7 @@ public final class JsonSeatRemote implements IRemote {
         } catch (final RuntimeException | Error ex) {
             synchronized (stateLock) { buildingSnapshot = false; }
             dirty = true;
-            LOG.log(System.Logger.Level.ERROR, "Seat " + (seat == null ? seatIndex : seat.getId())
+            LOG.log(System.Logger.Level.ERROR, "Seat " + (seat == null ? "unbound" : seat.getId())
                     + " snapshot failed; retrying on next object delta", ex);
         }
     }
@@ -224,6 +270,14 @@ public final class JsonSeatRemote implements IRemote {
         if (event instanceof GuiGameEvent gui) {
             LOG.log(System.Logger.Level.INFO, "[prompt] sendAndWait method={0} thread={1} requestId={2}",
                     gui.getMethod(), Thread.currentThread().getName(), gui.getId());
+            if (gui.getMethod() == forge.gamemodes.net.ProtocolMethod.getAbilityToPlay) {
+                java.util.Map<Integer, forge.game.spellability.SpellAbilityView> offered = new java.util.HashMap<>();
+                for (Object value : (Iterable<?>) gui.getObjects()[1]) {
+                    var ability = (forge.game.spellability.SpellAbilityView) value;
+                    offered.put(ability.getId(), ability);
+                }
+                abilities = java.util.Map.copyOf(offered);
+            }
             if (promptResponder != null) return promptResponder.answer(gui);
             if (gui.getMethod() == forge.gamemodes.net.ProtocolMethod.sideboard) {
                 LOG.log(System.Logger.Level.INFO, "[prompt] sideboard: unchanged main deck (out of v1)");

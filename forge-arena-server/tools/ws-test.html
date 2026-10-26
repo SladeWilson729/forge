@@ -13,6 +13,10 @@
   <h1>Forge Arena WebSocket test</h1>
   <p>Endpoint: <code id="endpoint"></code></p>
   <p id="status" role="status">Connecting…</p>
+  <p><label for="outbound">Raw JSON</label></p>
+  <textarea id="outbound" rows="5" cols="80">{"type":"ok"}</textarea>
+  <p><button id="send">Send JSON</button> <button id="ok">Keep / OK</button></p>
+  <div id="prompts"></div>
   <pre id="messages" aria-label="Received messages"></pre>
   <script>
     const status = document.getElementById('status');
@@ -21,12 +25,58 @@
     const endpoint = `ws://localhost:36800/ws?seat=${encodeURIComponent(seat)}`;
     document.getElementById('endpoint').textContent = endpoint;
     const socket = new WebSocket(endpoint);
+    let clientSeq = 0, baseSeq = 0;
+    const actions = new Set(['selectCard','selectPlayer','selectAbility','selectStackItem','ok','cancel','useMana',
+      'undo','declareAttacker','undeclareAttacker','declareBlocker','undeclareBlocker','attackAll','reorderHand',
+      'concede','nextGame','describeAbility','resync','setYield','macroRecord','macroNext','macroRepeat']);
+    function send(message) {
+      if (socket.readyState !== WebSocket.OPEN) throw new Error('Connect before sending');
+      if (actions.has(message.type)) {
+        message.clientSeq ??= ++clientSeq;
+        message.baseSeq ??= baseSeq;
+      }
+      socket.send(JSON.stringify(message));
+    }
+    document.getElementById('send').onclick = () => {
+      try { send(JSON.parse(document.getElementById('outbound').value)); }
+      catch (error) { status.textContent = error.message; }
+    };
+    document.getElementById('ok').onclick = () => send({type:'ok'});
     socket.addEventListener('open', () => { status.textContent = 'Connected'; });
     socket.addEventListener('close', event => { status.textContent = `Disconnected (code ${event.code}): ${event.reason}`; });
     socket.addEventListener('error', () => { status.textContent = 'Connection error. Check that ArenaServer is running.'; });
     socket.addEventListener('message', event => {
       let text = event.data;
-      try { text = JSON.stringify(JSON.parse(text), null, 2); } catch (_) { /* Display non-JSON messages as received. */ }
+      try {
+        const message = JSON.parse(text);
+        if (message.type === 'state') baseSeq = message.seq;
+        if (message.type === 'prompt') {
+          const panel = document.createElement('section');
+          const title = document.createElement('p'); title.textContent = message.title; panel.append(title);
+          const selected = [];
+          const reply = result => { send({type:'promptReply', requestId:message.requestId, result}); panel.remove(); };
+          for (const option of message.options) {
+            const button = document.createElement('button'); button.textContent = `${option.optionId}: ${option.label}`;
+            button.onclick = () => {
+              if (['chooseAbility','option'].includes(message.kind)) reply(option.optionId);
+              else { const index = selected.indexOf(option.optionId); if (index < 0) selected.push(option.optionId); else selected.splice(index,1);
+                button.style.fontWeight = selected.includes(option.optionId) ? 'bold' : 'normal'; }
+            }; panel.append(button);
+          }
+          if (['choose','chooseEntities','order','manipulateList'].includes(message.kind)) {
+            const done = document.createElement('button'); done.textContent = 'Submit selected order';
+            done.onclick = () => reply(message.kind === 'order' ? {ordered:selected,remember:false} : selected); panel.append(done);
+          }
+          if (message.kind === 'confirm') for (const value of [true,false]) {
+            const button = document.createElement('button'); button.textContent = value ? 'Yes' : 'No';
+            button.onclick = () => reply(value); panel.append(button);
+          }
+          const fallback = document.createElement('button'); fallback.textContent = 'Use default';
+          fallback.onclick = () => reply(message.default); panel.append(fallback);
+          document.getElementById('prompts').append(panel);
+        }
+        text = JSON.stringify(message, null, 2);
+      } catch (_) { /* Display non-JSON messages as received. */ }
       messages.append(document.createTextNode(text + '\n\n'));
     });
   </script>

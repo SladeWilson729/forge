@@ -30,6 +30,7 @@ public final class SeatWriter implements AutoCloseable {
     private long sequence;
     private volatile boolean closed;
     private volatile String lastState;
+    private final java.util.concurrent.atomic.AtomicBoolean resyncRequested = new java.util.concurrent.atomic.AtomicBoolean();
     // Only the writer thread accesses the channel and send timing.
     private Channel channel;
     private long nextStateAt;
@@ -37,6 +38,8 @@ public final class SeatWriter implements AutoCloseable {
     public SeatWriter(final int seat) {
         final JsonObject greeting = new JsonObject();
         greeting.addProperty("type", "hello");
+        // Connection preamble precedes cached messages; normal seat sequencing starts at 1.
+        greeting.addProperty("seq", 0L);
         greeting.addProperty("protocolVersion", 1);
         greeting.addProperty("serverVersion", "1.4-dev");
         greeting.addProperty("seat", seat);
@@ -95,8 +98,26 @@ public final class SeatWriter implements AutoCloseable {
         if (receiver != null) receiver.promptReply(reply);
     }
 
+    void action(final JsonObject message) {
+        final JsonSeatRemote receiver = remote;
+        if (receiver != null) receiver.action(message);
+        else {
+            JsonObject rejected = new JsonObject(); rejected.addProperty("type", "message");
+            rejected.addProperty("level", "rejected"); rejected.addProperty("text", "The seat is not ready"); sendFromIo(rejected);
+        }
+    }
+
+    void resync() { resyncRequested.set(true); LockSupport.unpark(thread); }
+
+    private void replayCached() {
+        if (lastState != null) write(lastState);
+        JsonSeatRemote receiver = remote;
+        if (receiver != null) receiver.pendingPromptMessages().forEach(this::write);
+    }
+
     private void run() {
         while (!closed) {
+            if (resyncRequested.getAndSet(false)) replayCached();
             String ioMessage;
             while ((ioMessage = ioMessages.poll()) != null) send(JsonParser.parseString(ioMessage).getAsJsonObject());
             Channel connected;

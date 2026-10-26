@@ -20,8 +20,9 @@ public final class IdMapper {
 
     private final SecureRandom random = new SecureRandom();
     private final Set<String> issued = new HashSet<>();
-    private Map<Integer, Entry> current = new HashMap<>();
-    private Map<String, Integer> opaque = new HashMap<>();
+    private volatile Map<Integer, Entry> current = Map.of();
+    private volatile Map<Object, Integer> reverse = Map.of();
+    private volatile Map<Integer, Entry> offered = Map.of();
     private Map<Integer, Entry> pending;
 
     public synchronized void beginSnapshot() {
@@ -73,14 +74,12 @@ public final class IdMapper {
         if (pending == null) {
             throw new IllegalStateException("No snapshot is in progress");
         }
-        final Map<String, Integer> nextOpaque = new HashMap<>();
+        final Map<Object, Integer> nextReverse = new HashMap<>();
         pending.forEach((id, entry) -> {
-            if (entry.ref() instanceof String hidden) {
-                nextOpaque.put(hidden, id);
-            }
+            nextReverse.put(entry.ref(), id);
         });
-        current = pending;
-        opaque = nextOpaque;
+        current = Map.copyOf(pending);
+        reverse = Map.copyOf(nextReverse);
         pending = null;
     }
 
@@ -90,20 +89,41 @@ public final class IdMapper {
     }
 
     /** Read-only reference from the latest completed snapshot, never from an in-progress walk. */
-    public synchronized Optional<Object> currentRef(final int realId) {
+    public Optional<Object> currentRef(final int realId) {
         final Entry entry = current.get(realId);
         return entry == null ? Optional.empty() : Optional.of(entry.ref());
     }
 
-    public synchronized OptionalInt resolve(final Object wireRef) {
-        if (wireRef instanceof Integer id) {
-            final Entry entry = current.get(id);
-            return entry != null && entry.visible() ? OptionalInt.of(id) : OptionalInt.empty();
-        }
-        if (wireRef instanceof String hidden) {
-            final Integer id = opaque.get(hidden);
-            return id == null ? OptionalInt.empty() : OptionalInt.of(id);
-        }
+    /** Netty reads immutable published maps without taking even the bookkeeping leaf lock. */
+    public OptionalInt resolve(final Object wireRef) {
+        if (!(wireRef instanceof Integer) && !(wireRef instanceof String)) return OptionalInt.empty();
+        Integer id = reverse.get(wireRef);
+        if (id != null) return OptionalInt.of(id);
+        for (var entry : offered.entrySet()) if (entry.getValue().ref().equals(wireRef)) return OptionalInt.of(entry.getKey());
         return OptionalInt.empty();
+    }
+
+    /** Offers are Input-scoped, separate from snapshots (libraries remain count-only). */
+    public synchronized Object offer(int id, String zone, boolean faceDown, boolean visible) {
+        Entry existing = current.get(id);
+        if (existing == null || !Objects.equals(existing.zone(), zone) || existing.faceDown() != faceDown
+                || (!visible && existing.ref() instanceof Integer)) existing = offered.get(id);
+        Object ref = existing != null && Objects.equals(existing.zone(), zone) && existing.faceDown() == faceDown
+                && (visible || existing.ref() instanceof String) ? existing.ref() : newOpaqueId();
+        Map<Integer, Entry> next = new HashMap<>(offered);
+        next.put(id, new Entry(zone, faceDown, visible, ref));
+        offered = Map.copyOf(next);
+        return ref;
+    }
+
+    public synchronized void retainOffers(Set<Integer> ids) {
+        Map<Integer, Entry> next = new HashMap<>(offered);
+        next.keySet().retainAll(ids);
+        offered = Map.copyOf(next);
+    }
+
+    public Optional<Object> inputRef(int id) {
+        Entry offer = offered.get(id);
+        return offer == null ? currentRef(id) : Optional.of(offer.ref());
     }
 }

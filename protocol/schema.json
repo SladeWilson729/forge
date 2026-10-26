@@ -671,6 +671,12 @@
         },
         "manaPoolOpen": {
           "type": "boolean"
+        },
+        "offered": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InputCardOffer"
+          }
         }
       },
       "required": [
@@ -3175,6 +3181,32 @@
         "cardRef"
       ],
       "additionalProperties": false
+    },
+    "InputCardOffer": {
+      "properties": {
+        "set": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "num": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "cardRef": {
+          "$ref": "#/$defs/CardRef"
+        }
+      },
+      "$comment": "Task 1.7 Input-scoped offers. Face-up hidden-zone cards are revealed only to the choosing seat; face-down identity requires CardVisibility permission (E5). References expire when the Input selection ends.",
+      "additionalProperties": false,
+      "required": [
+        "cardRef",
+        "label"
+      ],
+      "type": "object"
     }
   }
 }

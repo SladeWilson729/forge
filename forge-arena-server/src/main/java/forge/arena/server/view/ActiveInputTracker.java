@@ -46,6 +46,9 @@ public final class ActiveInputTracker {
     private final Set<Integer> omitted = ConcurrentHashMap.newKeySet();
     private final Consumer<String> diagnostic;
     private final JsonObject values = new JsonObject();
+    private com.google.gson.JsonArray offered = new JsonArray();
+
+    public synchronized void setOffered(JsonArray cards) { offered = cards.deepCopy(); }
 
     public ActiveInputTracker() {
         this(message -> LOG.log(System.Logger.Level.INFO, message));
@@ -155,7 +158,10 @@ public final class ActiveInputTracker {
     /** Map every card position using the latest COMPLETED snapshot, outside the tracker lock. */
     public JsonObject toJson(final IdMapper ids) {
         final JsonObject result;
-        synchronized (this) { result = values.deepCopy(); }
+        synchronized (this) {
+            result = values.deepCopy();
+            if (!offered.isEmpty()) result.add("offered", offered.deepCopy());
+        }
         final String kind = result.get("kind").getAsString();
         if ("waiting".equals(kind)) {
             // Waiting exposes no stale actions or previous prompt. Keep the recorded display for
@@ -195,7 +201,7 @@ public final class ActiveInputTracker {
     }
 
     private JsonElement cardRef(final int id, final IdMapper ids) {
-        final Object ref = ids.currentRef(id).orElse(null);
+        final Object ref = ids.inputRef(id).orElse(null);
         if (ref instanceof Integer visible) return new JsonPrimitive(visible);
         if (ref instanceof String hidden) return new JsonPrimitive(hidden);
         if (omitted.add(id)) diagnostic.accept("[input] Omitting card " + id + " without a current ref; prompt-offered ids: task 1.7");
