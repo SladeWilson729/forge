@@ -1,0 +1,554 @@
+<!doctype html>
+<!--
+Forge Arena fallback client (no build step or dependencies).
+Start .run/ArenaServerHuman0.run.xml in IntelliJ: ArenaServer (human 0).
+It starts seat 0 human, three bots, and holds the server open after the game.
+Open this file directly in a browser; append ?seat=0 (or another wire seat).
+Choose Human 0 in the page's Your player selector for this run configuration.
+Schema limits: no wire-seat/player-id mapping or card types are supplied. The selector
+is explicit, and combat helpers list battlefield cards; choose creatures and let Forge
+check legality. No identity, ownership, card type or legal target is inferred from a name.
+The server endpoint is ws://localhost:36800/ws?seat=N. Keep ws-test.html for raw debugging.
+Will performs the full Commander game check manually. Copy the wire log if play is blocked.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Forge Arena — dumb client</title>
+  <style>
+    :root { color-scheme: light; font: 15px/1.45 system-ui, sans-serif; background: #eef1f4; color: #17212b; }
+    body { margin: 0; padding: 16px; }
+    h1 { margin: 0; font-size: 1.4rem; } h2 { margin: 0 0 8px; font-size: 1.15rem; }
+    h3 { margin: 12px 0 4px; font-size: 1rem; } p { margin: 6px 0; }
+    button, select, input { font: inherit; padding: 5px 8px; max-width: 100%; }
+    button { cursor: pointer; border: 1px solid #7d8994; border-radius: 4px; background: #fff; color: #17212b; }
+    button:hover:enabled { background: #e5f0ff; } button:disabled { cursor: default; opacity: .5; }
+    button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid #165ec8; outline-offset: 2px; }
+    .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 6px 0; }
+    .muted { color: #526273; } .error, .rejected { color: #ad1423; font-weight: 600; }
+    .panel { background: white; border: 1px solid #c6ced7; border-radius: 6px; padding: 12px; min-width: 0; }
+    .layout { display: grid; grid-template-columns: minmax(0, 3fr) minmax(300px, 1fr); gap: 12px; margin-top: 12px; }
+    #board { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-content: start; }
+    aside { display: grid; gap: 12px; align-content: start; }
+    ul, ol { margin: 4px 0; padding-left: 22px; } li { margin: 4px 0; overflow-wrap: anywhere; }
+    .card { text-align: left; white-space: normal; }
+    .highlight { border-left: 4px solid #2560ae; } .strong { border-left: 7px double #7c3c97; }
+    .chosen { background: #e5efff; } .you { border-top: 4px solid #2560ae; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+    #log { height: 240px; overflow: auto; background: #17212b; color: #edf2f7; padding: 10px; }
+    dialog { width: min(760px, 90vw); max-height: 88vh; overflow: auto; border: 2px solid #526273; border-radius: 8px; }
+    dialog::backdrop { background: #17212baa; }
+    .choices { display: grid; gap: 6px; } .choices label { display: flex; gap: 8px; align-items: baseline; }
+    .split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .allocation input { width: 6rem; } #promptError { min-height: 1.4em; }
+    @media (max-width: 1000px) { .layout { grid-template-columns: 1fr; } }
+    @media (max-width: 650px) { #board, .split { grid-template-columns: 1fr; } body { padding: 8px; } }
+  </style>
+</head>
+<body>
+  <header class="panel">
+    <h1>Forge Arena · dumb client</h1>
+    <p id="status" role="status">Connecting…</p>
+    <p><code id="endpoint"></code></p>
+    <div id="sessionControls" class="row"></div>
+    <p id="summary">Waiting for a state.</p>
+  </header>
+  <main class="layout">
+    <div id="board" aria-label="Players and zones"></div>
+    <aside>
+      <section class="panel"><h2>Your action</h2><div id="action"></div></section>
+      <section class="panel"><h2>Combat</h2><div id="combat"></div></section>
+      <section class="panel"><h2>Stack</h2><div id="stack"></div></section>
+      <section class="panel"><h2>Messages · last 10</h2><div id="messages" aria-live="polite"></div></section>
+    </aside>
+  </main>
+  <section class="panel" style="margin-top:12px">
+    <div class="row"><h2>Wire log</h2><button id="copyLog">Copy log</button><button id="saveLog">Save log</button></div>
+    <p class="muted">Every received message and sent action, including private information visible to this seat.</p>
+    <pre id="log" tabindex="0"></pre>
+  </section>
+  <dialog id="promptDialog" aria-labelledby="promptTitle">
+    <h2 id="promptTitle"></h2><p id="promptMeta" class="muted"></p>
+    <div id="promptBody"></div><p id="promptError" class="error" role="alert"></p>
+    <div id="promptButtons" class="row"></div>
+  </dialog>
+  <script>
+  'use strict';
+  // No card rules or hidden identities are inferred here. The server owns legality.
+  const $ = id => document.getElementById(id);
+  const el = (tag, text, className) => {
+    const node = document.createElement(tag);
+    if (text !== undefined) node.textContent = text;
+    if (className) node.className = className;
+    return node;
+  };
+  const key = ref => JSON.stringify(ref); // Preserve integer refs versus opaque strings.
+  const list = value => Array.isArray(value) ? value : [];
+  const querySeat = new URLSearchParams(location.search).get('seat') ?? '0';
+  const seat = /^[0-3]$/.test(querySeat) ? Number(querySeat) : 0;
+  const endpoint = `ws://localhost:36800/ws?seat=${seat}`;
+  $('endpoint').textContent = endpoint;
+  let socket, welcomed = false, state = null, baseSeq = -1, clientSeq = 0;
+  let ownPlayerId = null, cards = new Map(), players = new Map(), stackItems = new Map();
+  let lastReply = null, titleTimer = null;
+  const pending = new Map(), notices = [], logLines = [], dropdowns = new Map();
+  const zones = ['hand', 'battlefield', 'graveyard', 'exile', 'command'];
+  const manaCodes = {W: 1, U: 2, B: 4, R: 8, G: 16, C: 0}; // MagicColor.WUBRGC, not ManaAtom.
+  const input = () => state?.activeInput ?? {kind: 'waiting'};
+  const connected = () => welcomed && socket?.readyState === WebSocket.OPEN;
+  const canAct = () => connected() && state && input().kind !== 'waiting' && !pending.size;
+  const ownPlayer = () => players.get(key(ownPlayerId));
+
+  function log(direction, message) {
+    const line = `${new Date().toISOString()} ${direction} ${JSON.stringify(message)}`;
+    logLines.push(line);
+    const atEnd = $('log').scrollHeight - $('log').scrollTop - $('log').clientHeight < 40;
+    $('log').append(document.createTextNode(line + '\n'));
+    if (atEnd) $('log').scrollTop = $('log').scrollHeight;
+  }
+  function notice(text, level = 'info') {
+    notices.push({text, level}); if (notices.length > 10) notices.shift();
+    $('messages').replaceChildren(...notices.map(m => el('p', m.text, m.level === 'rejected' || m.level === 'error' ? 'rejected' : '')));
+  }
+  function send(type, fields = {}) {
+    if (!connected()) { notice('Not connected; nothing was sent.', 'error'); return false; }
+    const message = {type, ...fields, clientSeq: ++clientSeq, baseSeq: Math.max(0, baseSeq)};
+    try { socket.send(JSON.stringify(message)); log('OUT', message); return true; }
+    catch (error) { notice(error.message, 'error'); return false; }
+  }
+  function action(type, fields = {}) { lastReply = null; return send(type, fields); }
+  function button(text, fn, enabled = true) {
+    const b = el('button', text); b.type = 'button'; b.disabled = !enabled; b.onclick = fn; return b;
+  }
+  function refName(ref) {
+    if (!ref || ref.id === null || ref.id === undefined) return '—';
+    if (ref.kind === 'player') return players.get(key(ref.id))?.name ?? `Player ${ref.id}`;
+    if (ref.kind === 'stack') return stackItems.get(key(ref.id))?.text ?? `Stack ${ref.id}`;
+    return cardName(cards.get(key(ref.id))) + ` (#${ref.id})`;
+  }
+  function cardName(card) {
+    if (!card) return '[card]';
+    if (card.hidden) return '[hidden]';
+    if (card.faceDown) return '[face-down]' + (card.name ? ` ${card.name}` : '');
+    return card.name ?? card.label ?? '[card]';
+  }
+  function cardText(card) {
+    let text = `${cardName(card)} #${card.id}`;
+    if (card.hidden) return text;
+    if (card.power !== undefined && card.toughness !== undefined) text += ` · ${card.power}/${card.toughness}`;
+    if (card.tapped) text += ' (T)';
+    if (card.sick) text += ' · summoning sick';
+    if (card.token) text += ' · token';
+    if (card.damage) text += ` · damage ${card.damage}`;
+    if (card.attacking) text += ` · attacking → ${refName(card.attackTarget)}`;
+    if (card.blocking) text += ` · blocking → ${list(card.blockingIds).join(', ') || '?'}`;
+    if (card.attachedTo) text += ` · attached to ${refName(card.attachedTo)}`;
+    const counters = Object.entries(card.counters ?? {}).map(([name, amount]) => `${name}: ${amount}`);
+    if (counters.length) text += ` · ${counters.join(', ')}`;
+    return text;
+  }
+  function indexState() {
+    players = new Map(list(state.players).map(p => [key(p.id), p]));
+    cards = new Map();
+    for (const p of players.values()) for (const zone of zones) for (const c of list(p.zones[zone])) cards.set(key(c.id), c);
+    stackItems = new Map(list(state.stack).map(item => [key(item.stackId), item]));
+    // Offers are separate from the normal zone lists. Do not replace a HiddenCard with its reveal.
+  }
+  function isOffered(id) {
+    const a = input();
+    return list(a.selectable).some(r => key(r) === key(id)) || list(a.highlighted).some(r => key(r.id) === key(id))
+      || list(a.offered).some(r => key(r.cardRef) === key(id))
+      || list(a.targets).some(r => r.kind === 'card' && key(r.id) === key(id));
+  }
+  function cardButton(card, playerId) {
+    const a = input(), strength = list(a.highlighted).find(h => key(h.id) === key(card.id))?.strength;
+    // A basic fallback click is needed when Forge's optional actionable highlights are off.
+    const ordinaryClick = !card.hidden && playerId === ownPlayerId && ['priority', 'payMana'].includes(a.kind);
+    const b = button(cardText(card), () => action('selectCard', {cardId: card.id}), canAct() && (isOffered(card.id) || ordinaryClick));
+    b.className = 'card' + (strength === 2 ? ' strong' : strength ? ' highlight' : '');
+    b.title = [card.set, card.num].filter(Boolean).join(' · ');
+    return b;
+  }
+  function entityButton(ref) {
+    const type = ref.kind === 'player' ? 'selectPlayer' : ref.kind === 'stack' ? 'selectStackItem' : 'selectCard';
+    const field = ref.kind === 'player' ? 'playerId' : ref.kind === 'stack' ? 'stackId' : 'cardId';
+    return button(refName(ref), () => action(type, {[field]: ref.id}), canAct());
+  }
+  function renderBoard() {
+    const expanded = new Map([...$('board').querySelectorAll('details[data-zone]')].map(n => [n.dataset.zone, n.open]));
+    $('board').replaceChildren();
+    for (const p of players.values()) {
+      const panel = el('section', undefined, 'panel' + (p.id === ownPlayerId ? ' you' : ''));
+      const targeted = list(input().targets).some(r => r.kind === 'player' && r.id === p.id);
+      panel.append(el('h2', `${p.name} · player ${p.id}${p.eliminated ? ' · eliminated' : ''}`));
+      if (targeted) panel.append(entityButton({kind: 'player', id: p.id}));
+      panel.append(el('p', `Life ${p.life} · poison ${p.poison} · library ${p.zones.library.count}`));
+      panel.append(el('p', 'Mana: ' + Object.entries(p.manaPool).map(([c, n]) => `${c} ${n}`).join(' · ')));
+      panel.append(el('p', 'Commander damage: ' + (list(p.commanderDamage).map(d => `${refName({kind: 'card', id: d.commanderId})}: ${d.damage}`).join('; ') || 'none')));
+      panel.append(el('p', 'Commanders: ' + (list(p.commanders).map(c => `${refName({kind: 'card', id: c.cardId})}: casts ${c.casts}, tax ${c.tax}`).join('; ') || 'none')));
+      for (const zone of zones) {
+        const zoneCards = list(p.zones[zone]);
+        const details = el('details'); details.dataset.zone = `${p.id}:${zone}`;
+        details.open = expanded.get(details.dataset.zone) ?? ['hand', 'battlefield', 'command'].includes(zone);
+        details.append(el('summary', `${zone} (${zoneCards.length})`));
+        const ul = el('ul');
+        for (const card of zoneCards) { const li = el('li'); li.append(cardButton(card, p.id)); ul.append(li); }
+        details.append(ul); panel.append(details);
+      }
+      $('board').append(panel);
+    }
+  }
+  function renderAction() {
+    const a = input(), root = $('action'); root.replaceChildren();
+    root.append(el('h3', a.kind), el('p', a.prompt ?? 'Waiting for the game.'));
+    if (a.sourceCardId !== undefined) root.append(el('p', 'Source: ' + refName({kind: 'card', id: a.sourceCardId})));
+    if (a.min !== undefined) root.append(el('p', `Selection: ${a.min}–${a.max}`));
+    if (a.chosen?.length) root.append(el('p', 'Chosen: ' + a.chosen.map(refName).join('; '), 'chosen'));
+    const controls = el('div', undefined, 'row');
+    const combat = ['declareAttackers', 'declareBlockers'].includes(a.kind);
+    for (const type of ['ok', 'cancel']) {
+      const label = a[type + 'Label'];
+      // Never invent a generic Cancel during combat; Forge may mean alpha strike or recall.
+      if (combat && !label) continue;
+      if (a.kind !== 'waiting') controls.append(button(label || (type === 'ok' ? 'OK' : 'Cancel'),
+        () => action(type), canAct() && !!a.buttons?.[type]?.enabled));
+    }
+    root.append(controls);
+    const offers = el('div', undefined, 'choices'), seen = new Set();
+    for (const offer of list(a.offered)) {
+      seen.add(key(offer.cardRef));
+      offers.append(button(`${offer.label} #${offer.cardRef}${offer.set ? ` · ${offer.set} ${offer.num ?? ''}` : ''}`,
+        () => action('selectCard', {cardId: offer.cardRef}), canAct()));
+    }
+    for (const id of [...list(a.selectable), ...list(a.highlighted).map(h => h.id)]) {
+      if (seen.has(key(id))) continue; seen.add(key(id));
+      const card = cards.get(key(id)) ?? {id}; offers.append(cardButton(card, null));
+    }
+    for (const ref of list(a.targets)) offers.append(entityButton(ref));
+    root.append(offers);
+    if (a.kind === 'payMana' || a.manaPoolOpen) {
+      root.append(el('h3', 'Mana pool'));
+      const pool = ownPlayer()?.manaPool;
+      for (const [color, code] of Object.entries(manaCodes)) if ((pool?.[color] ?? 0) > 0)
+        root.append(button(`${color}: ${pool[color]}`, () => action('useMana', {color: code}), canAct() && a.kind === 'payMana'));
+      root.append(el('p', 'Click a source on the battlefield to activate its mana ability.', 'muted'));
+    }
+    root.append(button('Undo', () => action('undo'), canAct()));
+    root.append(button('Concede', () => { if (confirm('Concede this game?')) action('concede'); }, connected() && !!state && !pending.size));
+  }
+  function renderStack() {
+    const root = $('stack'); root.replaceChildren();
+    for (const item of stackItems.values()) {
+      const div = el('div');
+      div.append(button(`#${item.stackId} ${item.text}`, () => action('selectStackItem', {stackId: item.stackId}),
+        canAct() && ['target', 'selectStack'].includes(input().kind)));
+      div.append(el('p', 'Targets: ' + (item.targets.map(refName).join('; ') || 'none'))); root.append(div);
+    }
+    if (!stackItems.size) root.append(el('p', 'Empty', 'muted'));
+  }
+  function render() {
+    if (state) {
+      indexState();
+      $('summary').textContent = `Turn ${state.turn} · ${state.phase ?? 'Starting'} · active: ${refName({kind: 'player', id: state.activePlayerId})} · priority: ${refName({kind: 'player', id: state.priorityPlayerId})} · state ${baseSeq}`;
+    } else $('summary').textContent = 'Waiting for a state.';
+    renderBoard(); renderAction(); renderStack(); renderCombat(); renderSession();
+    $('promptButtons').querySelectorAll('button').forEach(b => b.disabled = !connected());
+  }
+
+  // Combat messages express intent; never reproduce InputAttack/InputBlock click sequences here.
+  function targetSelect(storageKey, targets, caption) {
+    const select = el('select'); select.setAttribute('aria-label', caption);
+    const empty = el('option', 'Choose target…'); empty.value = ''; select.append(empty);
+    for (const target of targets) {
+      const option = el('option', refName(target)); option.value = key(target); select.append(option);
+    }
+    const remembered = dropdowns.get(storageKey);
+    if (targets.some(t => key(t) === remembered)) select.value = remembered;
+    select.onchange = () => dropdowns.set(storageKey, select.value);
+    return select;
+  }
+  function selectedTarget(select) {
+    if (!select.value) { notice('Choose a combat target first.', 'rejected'); return null; }
+    return JSON.parse(select.value);
+  }
+  function renderCombat() {
+    const root = $('combat'), kind = input().kind; root.replaceChildren();
+    if (!['declareAttackers', 'declareBlockers'].includes(kind)) {
+      root.append(el('p', 'Combat controls appear during declarations.', 'muted')); return;
+    }
+    if (!ownPlayer()) { root.append(el('p', 'Choose Your player above to show combat controls.')); return; }
+    root.append(el('p', 'Battlefield cards are listed because card types are not supplied. Choose your creatures; Forge checks legality.', 'muted'));
+    const battlefield = [...players.values()].flatMap(p => list(p.zones.battlefield));
+    const own = battlefield.filter(c => c.controllerId === ownPlayerId && !c.hidden);
+    const attacking = kind === 'declareAttackers';
+    const targets = attacking ? list(input().attackTargets)
+      : battlefield.filter(c => c.attacking).map(c => ({kind:'card', id:c.id}));
+    if (attacking) {
+      const row = el('div', undefined, 'row'), select = targetSelect('attack-all', targets, 'Attack all target');
+      select.disabled = !canAct();
+      row.append(select, button('Attack all', () => {
+        const defenderId = selectedTarget(select); if (defenderId) action('attackAll', {defenderId});
+      }, canAct() && targets.length > 0)); root.append(row);
+    }
+    for (const card of own.filter(c => !attacking || !c.tapped || c.attacking)) {
+      const row = el('div'); row.append(el('p', cardText(card)));
+      const select = targetSelect(`${kind}:${key(card.id)}`, targets, `Target for ${cardName(card)} #${card.id}`);
+      select.disabled = !canAct();
+      const controls = el('div', undefined, 'row');
+      controls.append(select, button(attacking ? 'Declare attacker' : 'Declare blocker', () => {
+        const target = selectedTarget(select); if (!target) return;
+        if (attacking) action('declareAttacker', {attackerId:card.id, defenderId:target});
+        else action('declareBlocker', {blockerId:card.id, attackerId:target.id});
+      }, canAct() && targets.length > 0));
+      controls.append(button(attacking ? 'Remove attacker' : 'Remove blocker', () => {
+        action(attacking ? 'undeclareAttacker' : 'undeclareBlocker', {[attacking ? 'attackerId' : 'blockerId']:card.id});
+      }, canAct() && (attacking ? !!card.attacking : !!card.blocking)));
+      row.append(controls); root.append(row);
+    }
+    if (!own.length) root.append(el('p', 'No visible battlefield cards controlled by this player.'));
+  }
+  function renderSession() {
+    const root = $('sessionControls'); root.replaceChildren();
+    const label = el('label', 'Your player '), select = el('select'); select.id = 'yourPlayer';
+    const empty = el('option', 'Choose the player you control…'); empty.value = ''; select.append(empty);
+    for (const p of players.values()) {
+      const option = el('option', `${p.name} · player ${p.id}`); option.value = String(p.id); select.append(option);
+    }
+    if (ownPlayerId !== null && ownPlayer()) select.value = String(ownPlayerId);
+    select.disabled = !state;
+    select.onchange = () => { ownPlayerId = select.value === '' ? null : Number(select.value); render(); };
+    label.append(select); root.append(label, button('Refresh state / pending prompts', () => action('resync'), connected()));
+    if (state && !ownPlayer()) root.append(el('span', 'Choose your player to enable hand/mana/combat controls.', 'muted'));
+  }
+
+  function optionText(o) { return `${o.optionId}: ${o.label}${o.cardRef !== undefined ? ` (#${o.cardRef})` : ''}${o.set ? ` · ${o.set} ${o.num ?? ''}` : ''}`; }
+  function checked(value) { const n = el('input'); n.type = 'checkbox'; n.checked = !!value; return n; }
+  function requireValue(ok, message) { if (!ok) throw new Error(message); }
+  function promptButton(label, result) {
+    $('promptButtons').append(button(label, () => {
+      try { reply(typeof result === 'function' ? result() : result); }
+      catch (error) { $('promptError').textContent = error.message; }
+    }, connected()));
+  }
+  function reply(result) {
+    const p = pending.values().next().value;
+    if (!p || !send('promptReply', {requestId: p.requestId, result})) return;
+    lastReply = p.requestId;
+    pending.delete(p.requestId); $('promptDialog').close(); showPrompt(); render();
+  }
+  function showPrompt() {
+    const p = pending.values().next().value;
+    if (!p) return;
+    $('promptTitle').textContent = p.title || p.kind;
+    $('promptMeta').textContent = `${p.kind} · request ${p.requestId}${p.sourceCardId !== undefined ? ` · source #${p.sourceCardId}` : ''}`;
+    $('promptError').textContent = '';
+    $('promptBody').replaceChildren(); $('promptButtons').replaceChildren();
+    const root = $('promptBody');
+    if (p.text) root.append(el('p', p.text));
+    if (p.revealed?.length) {
+      root.append(el('p', p.revealMessage || 'Revealed cards'));
+      for (const c of p.revealed) root.append(el('p', `${c.label} #${c.cardRef}${c.set ? ` · ${c.set} ${c.num ?? ''}` : ''}`));
+    }
+    switch (p.kind) {
+      case 'choose': case 'chooseEntities': {
+        root.append(el('p', p.revealOnly ? 'Review the revealed options, then acknowledge.' : `Choose ${p.min}–${p.max}.`));
+        const rows = new Map();
+        for (const o of p.options) {
+          const label = el('label'), box = checked(list(p.selected).includes(o.optionId));
+          box.disabled = !!p.revealOnly; if (p.revealOnly) box.checked = false;
+          label.append(box, document.createTextNode(optionText(o))); root.append(label, el('br')); rows.set(o.optionId, box);
+        }
+        promptButton(p.revealOnly ? 'Acknowledge' : 'Submit choices', () => {
+          const result = [...rows].filter(([, b]) => b.checked).map(([id]) => id);
+          requireValue(result.length >= p.min && result.length <= p.max, `Choose ${p.min}–${p.max} options.`); return result;
+        }); break;
+      }
+      case 'order': renderOrder(p, root); break;
+      case 'manipulateList': renderManipulation(p, root); break;
+      case 'confirm':
+        promptButton(p.options[0]?.label || 'Yes', true); promptButton(p.options[1]?.label || 'No', false); break;
+      case 'option': case 'chooseAbility':
+        p.options.forEach((o, index) => promptButton(optionText(o), p.kind === 'option' ? index : o.optionId));
+        if (p.kind === 'option') promptButton('Close / no option', -1); break;
+      case 'number': case 'text': {
+        let field;
+        if (p.restrictedInput) {
+          field = el('select');
+          for (const o of p.options) { const option = el('option', o.label); option.value = o.label; field.append(option); }
+          if (p.initialInput !== null) field.value = p.initialInput;
+        } else {
+          field = el('input'); field.type = 'text'; field.value = p.initialInput ?? '';
+          if (p.kind === 'number') field.inputMode = 'numeric';
+        }
+        field.setAttribute('aria-label', p.title || p.kind); root.append(field);
+        promptButton('Submit', () => {
+          requireValue(p.kind !== 'number' || /^[+-]?[0-9]+$/.test(field.value), 'Enter an integer.');
+          requireValue(!p.restrictedInput || p.options.some(o => o.label === field.value), 'Choose an offered value.');
+          return field.value; // Numeric input is an integer STRING, never a JSON number.
+        }); promptButton('Cancel input', null); break;
+      }
+      case 'assignCombatDamage': case 'assignGeneric': renderAllocation(p, root); break;
+      default: root.append(el('p', `Unsupported prompt kind: ${p.kind}. Copy the log and report it.`, 'error')); break;
+    }
+    if (Object.hasOwn(p, 'default')) promptButton('Use server default', () => p.default);
+    if (!$('promptDialog').open) $('promptDialog').showModal();
+  }
+  function renderOrder(p, root) {
+    let ordered = [...p.default.ordered];
+    const remember = checked(p.default.remember && p.rememberAllowed);
+    root.append(el('p', p.top || 'Destination order (first item at top)'));
+    root.append(el('p', `Return ${p.min}–${p.max} items; leave ${p.remainingMin}–${p.remainingMax} in the source.`));
+    const lists = el('div', undefined, 'split'); root.append(lists);
+    const draw = () => {
+      lists.replaceChildren();
+      const source = el('div'), destination = el('div');
+      source.append(el('h3', 'Source / not returned')); destination.append(el('h3', `Destination (${ordered.length})`));
+      for (const o of p.options.filter(o => !ordered.includes(o.optionId))) {
+        const row = el('div', undefined, 'row'); row.append(el('span', optionText(o)),
+          button('Add →', () => { ordered.push(o.optionId); draw(); })); source.append(row);
+      }
+      ordered.forEach((id, index) => {
+        const row = el('div', undefined, 'row'); row.append(el('span', optionText(p.options.find(o => o.optionId === id))),
+          button('↑', () => { [ordered[index - 1], ordered[index]] = [ordered[index], ordered[index - 1]]; draw(); }, index > 0),
+          button('↓', () => { [ordered[index + 1], ordered[index]] = [ordered[index], ordered[index + 1]]; draw(); }, index < ordered.length - 1),
+          button('← Remove', () => { ordered.splice(index, 1); draw(); })); destination.append(row);
+      }); lists.append(source, destination);
+    }; draw();
+    if (p.rememberAllowed) { const label = el('label'); label.append(remember, document.createTextNode(' Remember this order')); root.append(label); }
+    promptButton('Submit destination order', () => {
+      const remaining = p.options.length - ordered.length;
+      requireValue(ordered.length >= p.min && ordered.length <= p.max && remaining >= p.remainingMin && remaining <= p.remainingMax, 'Destination/source counts are outside the requested limits.');
+      return {ordered, remember: p.rememberAllowed && remember.checked};
+    });
+  }
+  function legalManipulation(p, order) {
+    const original = p.options.map(o => o.optionId), movable = new Set(p.manipulable);
+    if (key(original.filter(id => !movable.has(id))) !== key(order.filter(id => !movable.has(id)))) return false;
+    if (p.toAnywhere) return true;
+    for (let start = 0; start <= order.length; start++) for (let end = start; end <= order.length; end++) {
+      if ((start > 0 && !p.toTop) || (end < order.length && !p.toBottom)) continue;
+      const moved = [...order.slice(0, start), ...order.slice(end)];
+      if (moved.every(id => movable.has(id)) && key(original.filter(id => !moved.includes(id))) === key(order.slice(start, end))) return true;
+    }
+    return false;
+  }
+  function renderManipulation(p, root) {
+    let order = p.options.map(o => o.optionId);
+    root.append(el('p', `Move the indicated cards: ${p.toAnywhere ? 'anywhere' : [p.toTop && 'top', p.toBottom && 'bottom'].filter(Boolean).join(' or ') || 'no moves allowed'}. Fixed cards keep their relative order.`));
+    const rows = el('div'); root.append(rows);
+    const draw = () => {
+      rows.replaceChildren();
+      order.forEach((id, index) => {
+        const movable = p.manipulable.includes(id), row = el('div', undefined, 'row');
+        const move = destination => { order.splice(index, 1); order.splice(destination, 0, id); draw(); };
+        row.append(el('span', optionText(p.options.find(o => o.optionId === id)) + (movable ? '' : ' · fixed')));
+        if (p.toAnywhere) row.append(button('↑', () => move(index - 1), movable && index > 0), button('↓', () => move(index + 1), movable && index < order.length - 1));
+        if (p.toTop || p.toAnywhere) row.append(button('Top', () => move(0), movable));
+        if (p.toBottom || p.toAnywhere) row.append(button('Bottom', () => move(order.length - 1), movable));
+        rows.append(row);
+      });
+    }; draw();
+    promptButton('Submit list order', () => { requireValue(legalManipulation(p, order), 'This ordering violates the allowed moves.'); return order; });
+    $('promptButtons').append(button('Reset order', () => { order = p.options.map(o => o.optionId); draw(); $('promptError').textContent = ''; }));
+  }
+  function renderAllocation(p, root) {
+    root.append(el('p', `Assign exactly ${p.amount}.${p.atLeastOne ? ' Each target needs at least 1.' : ''}`));
+    const fields = [], total = el('p');
+    for (let index = 0; index < p.options.length; index++) {
+      const o = p.options[index], row = el('label', undefined, 'row allocation'), n = el('input');
+      n.type = 'number'; n.step = '1'; n.min = p.atLeastOne ? '1' : '0'; n.max = String(p.capacities?.[index] ?? p.amount);
+      n.value = String(list(p.default).find(a => a.optionId === o.optionId)?.amount ?? 0);
+      n.setAttribute('aria-label', 'Amount for ' + o.label); fields.push(n);
+      row.append(el('span', optionText(o) + (p.capacities ? ` · capacity ${p.capacities[index]}` : ` · lethal ${p.lethal[index]}`)), n); root.append(row);
+    }
+    const update = () => { total.textContent = `Assigned ${fields.reduce((sum, n) => sum + Number(n.value), 0)} / ${p.amount}`; };
+    fields.forEach(n => n.oninput = update); update(); root.append(total);
+    if (p.kind === 'assignCombatDamage') root.append(el('p', p.divideDamage ? 'Divide damage freely among recipients.' : p.overrideOrder ? 'Any blocker order; assign lethal to all blockers before the defender.' : 'Assign lethal before assigning damage to later recipients.'));
+    promptButton('Submit amounts', () => {
+      const amounts = fields.map(n => Number(n.value));
+      requireValue(fields.every(n => n.value !== '') && amounts.every(n => Number.isInteger(n) && n >= 0 && n <= 2147483647), 'Use nonnegative integer amounts.');
+      requireValue(amounts.reduce((a, b) => a + b, 0) === p.amount, `Amounts must sum to ${p.amount}.`);
+      if (p.kind === 'assignGeneric') amounts.forEach((n, i) => {
+        requireValue(n <= p.capacities[i] && (!p.atLeastOne || n >= 1), 'Respect each capacity and minimum.');
+      });
+      else if (!p.divideDamage) {
+        let alive = false;
+        amounts.forEach((n, i) => {
+          requireValue(!alive || n === 0 || (p.overrideOrder && p.options[i].optionId !== p.defenderOptionId), 'Assign lethal before later recipients/the defender.');
+          alive ||= n < p.lethal[i];
+        });
+      }
+      return amounts.map((amount, i) => ({optionId: p.options[i].optionId, amount}));
+    });
+    if (p.maySkip) promptButton('Skip damage assignment', null);
+  }
+  function receive(message) {
+    log('IN', message);
+    switch (message.type) {
+      case 'hello':
+        welcomed = message.protocolVersion === 1 && message.seat === seat;
+        baseSeq = -1; state = null; cards.clear(); players.clear(); stackItems.clear(); pending.clear(); lastReply = null;
+        $('promptDialog').close();
+        $('status').textContent = welcomed ? `Connected · seat ${seat} · ${message.serverVersion}` : 'Incompatible protocol or seat. Actions disabled.';
+        if (!welcomed) notice('Expected protocolVersion 1 and the requested seat.', 'error'); render(); break;
+      case 'state':
+        if (!welcomed || !Number.isSafeInteger(message.seq) || message.seq <= baseSeq) break;
+        baseSeq = message.seq; state = message; render(); break;
+      case 'prompt':
+        if (!welcomed) break;
+        pending.set(message.requestId, message);
+        if (pending.keys().next().value === message.requestId) showPrompt();
+        render(); break;
+      case 'promptCancel': {
+        const current = pending.keys().next().value === message.requestId;
+        pending.delete(message.requestId);
+        if (lastReply === message.requestId) lastReply = null;
+        if (current) { $('promptDialog').close(); showPrompt(); }
+        render(); break;
+      }
+      case 'message':
+        notice(`${message.title ? message.title + ': ' : ''}${message.text}`, message.level);
+        // Rejections carry no requestId. Ask for the authoritative pending list after a reply,
+        // rather than assuming that a reply succeeded or inventing a different answer.
+        if (message.level === 'rejected' && lastReply !== null) { lastReply = null; send('resync'); }
+        break;
+      case 'attention': {
+        clearInterval(titleTimer); let ticks = 0;
+        titleTimer = setInterval(() => {
+          document.title = ++ticks % 2 ? 'Your attention — Forge Arena' : 'Forge Arena — dumb client';
+          if (ticks >= 10) { clearInterval(titleTimer); document.title = 'Forge Arena — dumb client'; }
+        }, 500); break;
+      }
+      case 'log': notice(message.text); break;
+      case 'logTail': list(message.entries).forEach(entry => notice(entry.text)); break;
+      case 'abilityDescription': notice(message.text); break;
+      default: break; // All messages, including future types, remain in the wire log.
+    }
+  }
+  function connect() {
+    welcomed = false; $('status').textContent = `Connecting · seat ${seat}…`;
+    socket = new WebSocket(endpoint);
+    socket.onmessage = event => {
+      try { receive(JSON.parse(event.data)); }
+      catch (error) { log('ERROR', {text: error.message, received: event.data}); notice('Message could not be displayed: ' + error.message, 'error'); }
+    };
+    socket.onerror = () => { $('status').textContent = 'Connection error; check the server.'; };
+    socket.onclose = event => {
+      welcomed = false; $('status').textContent = `Disconnected (${event.code}) ${event.reason}. Reconnecting in 2 s…`;
+      render(); setTimeout(connect, 2000);
+    };
+  }
+  $('promptDialog').addEventListener('cancel', event => event.preventDefault()); // Escape must not silently abandon a blocking prompt.
+  $('copyLog').onclick = async () => {
+    try { await navigator.clipboard.writeText(logLines.join('\n')); notice('Wire log copied.'); }
+    catch (_) { const range = document.createRange(); range.selectNodeContents($('log')); const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range); notice('Log selected. Press Ctrl+C to copy.'); }
+  };
+  $('saveLog').onclick = () => {
+    const url = URL.createObjectURL(new Blob([logLines.join('\n') + '\n'], {type: 'text/plain'}));
+    const link = el('a'); link.href = url; link.download = `arena-seat-${seat}-wire.jsonl`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+  render(); connect();
+  </script>
+</body>
+</html>
