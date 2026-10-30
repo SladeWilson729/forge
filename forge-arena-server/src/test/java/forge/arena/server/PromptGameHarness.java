@@ -180,10 +180,17 @@ final class PromptGameHarness implements AutoCloseable {
         edt(() -> {
             match.startMatch(GameType.Commander, EnumSet.of(GameType.Commander), players, Map.of(players.get(humanSeat), gui));
             game = match.getGame(); human = (PlayerControllerHuman) ArenaServerMain.playerFor(game, players.get(humanSeat)).getController();
+            System.out.println("[startup] registered=" + players.size() + " live=" + game.getPlayers().size());
+            assertEquals(game.getPlayers().size(), 4, "All registered players created before play");
             ownerId = human.getPlayer().getId();
             controller = gui.getGameController(human.getPlayer().getView()); return null;
         });
         assertEquals(client.hello(humanSeat).get("playerId").getAsInt(), ownerId);
+        // Cold Match.prepareAllZones/CardFactory initialization is not an Input action.
+        // Other suite tests used to warm it before our five-second advance deadline;
+        // a cold timeout then conceded the bots while prepareAllZones still iterated them.
+        // Wait for Forge's first displayed Input explicitly, without driving or ending play.
+        until(() -> ready(human.getInputQueue().getInput()), "initial displayed Input", 30);
         advance(input -> configured.getCount() == 0 && input instanceof InputPassPriority
                 && game.getPhaseHandler().getPlayerTurn() == human.getPlayer()
                 && game.getPhaseHandler().getPhase() == PhaseType.MAIN1);
@@ -299,10 +306,15 @@ final class PromptGameHarness implements AutoCloseable {
     }
 
     void until(Callable<Boolean> predicate, String label) throws Exception {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        until(predicate, label, 5);
+    }
+
+    private void until(Callable<Boolean> predicate, String label, int seconds) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds);
         while (System.nanoTime() < deadline) {
             healthy(); if (edt(predicate)) return; Thread.sleep(10);
         }
+        dumpThreads("Timed out: " + label);
         fail("Timed out: " + label + "; input=" + edt(() -> human.getInputQueue().getInput()));
     }
     static <T> FutureTask<T> later(Callable<T> action) {
