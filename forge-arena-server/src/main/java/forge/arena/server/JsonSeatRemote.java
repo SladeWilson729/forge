@@ -50,6 +50,12 @@ public final class JsonSeatRemote implements IRemote {
     // Our JSON/bookkeeping only. Never held across a Forge call or a graph walk.
     private final Object stateLock = new Object();
     private boolean buildingSnapshot;
+    // Dirty work is distinct from the failed-snapshot health bit: queued work has an owner.
+    private boolean snapshotRequested;
+    private final List<List<?>> pendingSnapshotEvents = new ArrayList<>();
+    // Test observation point, after the walk but before publication; never called under stateLock.
+    private java.util.function.Consumer<JsonObject> snapshotBuiltObserver = state -> { };
+
     private final Set<String> unexpectedDisplayThreads = ConcurrentHashMap.newKeySet();
     private final SeatWriter writer;
     private volatile boolean dirty;
@@ -111,16 +117,23 @@ public final class JsonSeatRemote implements IRemote {
         switch (gui.getMethod()) {
             case setSelection, updateButtons, showPromptMessage, setWeaklySelectable,
                     clearWeaklySelectable, showManaPool, hideManaPool, awaitNextInput -> display(gui);
-            case setGameView -> snapshot();
+            case setGameView -> snapshot(List.of());
             case applyDelta -> {
                 final DeltaPacket delta = (DeltaPacket) args[0];
-                // Events-only packets may originate on a timer/I/O thread. Even a dirty seat
-                // must wait for the next object-bearing delta before walking live Forge state.
+                // Only object-bearing packets request a walk. Events that arrive during a
+                // build join its queue, so a coalesced request never loses its accompanying events.
                 if (!delta.getObjectDeltas().isEmpty() || !delta.getNewObjects().isEmpty()) {
-                    snapshot();
-                }
-                if (eventPump != null && !dirty && delta.hasEvents()) {
-                    eventPump.batch(delta.getEvents(), lastStateSequence).forEach(writer::send);
+                    snapshot(delta.getEvents());
+                } else if (delta.hasEvents()) {
+                    synchronized (stateLock) {
+                        if (buildingSnapshot) {
+                            pendingSnapshotEvents.add(List.copyOf(delta.getEvents()));
+                            return;
+                        }
+                    }
+                    if (eventPump != null && !dirty) {
+                        eventPump.batch(delta.getEvents(), lastStateSequence).forEach(writer::send);
+                    }
                 }
             }
             case showRevealedCards -> showRevealed((Iterable<?>) args[0]);
@@ -175,12 +188,18 @@ public final class JsonSeatRemote implements IRemote {
             // A timer can race a full walk. Retain its display in the tracker and let that
             // walk publish it, rather than pairing newly completed ids with the old graph.
             if (latestState == null || buildingSnapshot) return;
-            final JsonObject input = inputTracker.toJson(ids);
-            if (input.equals(latestState.getAsJsonObject("activeInput"))) return;
-            final JsonObject state = latestState.deepCopy();
-            state.add("activeInput", input);
-            publish(state); // Detached JSON only; SeatWriter assigns a new seq and coalesces.
+            publishInputChange();
         }
+    }
+
+    /** stateLock held; detached JSON only. Also catches displays arriving late in a build. */
+    private void publishInputChange() {
+        if (latestState == null) return;
+        final JsonObject input = inputTracker.toJson(ids);
+        if (input.equals(latestState.getAsJsonObject("activeInput"))) return;
+        final JsonObject state = latestState.deepCopy();
+        state.add("activeInput", input);
+        publish(state);
     }
 
     /** Forge-safe display caller only. Offers never grant another seat visibility. */
@@ -260,38 +279,67 @@ public final class JsonSeatRemote implements IRemote {
 
     Set<Integer> revealDisagreements() { return Set.copyOf(revealDisagreements); }
 
-    private void snapshot() {
-        synchronized (stateLock) { buildingSnapshot = true; }
-        try {
-            if (match != null && game != match.getGame()) {
-                final Game running = Objects.requireNonNull(match.getGame());
-                // HostedMatch sorts humans first; wire seat numbers are never game-list indexes.
-                seat = ArenaServerMain.playerFor(running, registeredPlayer).getView();
-                game = running;
-                writer.bindPlayer(seat.getId());
-                eventPump = null;
-            }
-            // Inline, on Forge's safe caller (plan 2.2 rule 1). Serializer owns the shared
-            // CardVisibility/IdMapper policy; never reconstruct visibility in the transport.
-            final JsonObject state = serializer.buildState(game, seat, ids, 0);
-            if (eventPump == null) eventPump = new EventPump(seat, ids);
-            final boolean gameOver = game.isGameOver();
-            synchronized (stateLock) {
-                if (gameOver) { revealed = new com.google.gson.JsonArray(); revealGeneration++; ids.clearReveals(); }
-                if (!revealed.isEmpty()) state.add("revealed", revealed.deepCopy());
-                state.add("activeInput", inputTracker.toJson(ids));
-                publish(state);
-                lastFullSnapshotSequence = lastStateSequence;
-                buildingSnapshot = false;
-            }
-            eventPump.snapshot(game, state, serializer.cardStubs()).forEach(writer::send);
-            dirty = false;
-        } catch (final RuntimeException | Error ex) {
-            synchronized (stateLock) { buildingSnapshot = false; }
-            dirty = true;
-            LOG.log(System.Logger.Level.ERROR, "Seat " + (seat == null ? "unbound" : seat.getId())
-                    + " snapshot failed; retrying on next object delta", ex);
+    private void snapshot(final List<?> events) {
+        synchronized (stateLock) {
+            if (dirty) throw new IllegalStateException("Seat snapshot previously aborted");
+            snapshotRequested = true;
+            if (events != null && !events.isEmpty()) pendingSnapshotEvents.add(List.copyOf(events));
+            if (buildingSnapshot) return;
+            buildingSnapshot = true;
         }
+        try {
+            while (true) {
+                final boolean rebuild;
+                final List<List<?>> batches;
+                synchronized (stateLock) {
+                    rebuild = snapshotRequested;
+                    snapshotRequested = false;
+                    batches = new ArrayList<>(pendingSnapshotEvents);
+                    pendingSnapshotEvents.clear();
+                    if (!rebuild && batches.isEmpty()) {
+                        publishInputChange();
+                        buildingSnapshot = false;
+                        return; // Ownership release and the empty check are atomic with requests.
+                    }
+                }
+                // The owner stays on its original Forge-safe caller through every rebuild.
+                // No bridge monitor is held during a Forge read, callback, or event encoding.
+                if (rebuild) buildSnapshot();
+                if (eventPump != null) {
+                    for (List<?> batch : batches) eventPump.batch(batch, lastStateSequence).forEach(writer::send);
+                }
+            }
+        } catch (final RuntimeException | Error ex) {
+            synchronized (stateLock) { dirty = true; buildingSnapshot = false; }
+            // An actual serializer failure is fatal to this seat, never a silent wait for a
+            // delta that may not arrive while Forge is parked on human input.
+            throw ex;
+        }
+    }
+
+    private void buildSnapshot() {
+        if (match != null && game != match.getGame()) {
+            final Game running = Objects.requireNonNull(match.getGame());
+            // HostedMatch sorts humans first; wire seat numbers are never game-list indexes.
+            seat = ArenaServerMain.playerFor(running, registeredPlayer).getView();
+            game = running;
+            writer.bindPlayer(seat.getId());
+            eventPump = null;
+        }
+        // Inline, on Forge's safe caller (plan 2.2 rule 1). Serializer owns the shared
+        // CardVisibility/IdMapper policy; never reconstruct visibility in the transport.
+        final JsonObject state = serializer.buildState(game, seat, ids, 0);
+        snapshotBuiltObserver.accept(state);
+        if (eventPump == null) eventPump = new EventPump(seat, ids);
+        final boolean gameOver = game.isGameOver();
+        synchronized (stateLock) {
+            if (gameOver) { revealed = new com.google.gson.JsonArray(); revealGeneration++; ids.clearReveals(); }
+            if (!revealed.isEmpty()) state.add("revealed", revealed.deepCopy());
+            state.add("activeInput", inputTracker.toJson(ids));
+            publish(state);
+            lastFullSnapshotSequence = lastStateSequence;
+        }
+        eventPump.snapshot(game, state, serializer.cardStubs()).forEach(writer::send);
     }
 
     public boolean isDirty() {
@@ -303,6 +351,10 @@ public final class JsonSeatRemote implements IRemote {
     }
 
     // Test probes only: detached JSON and bookkeeping, never a live Forge graph.
+    void setSnapshotBuiltObserver(java.util.function.Consumer<JsonObject> observer) {
+        snapshotBuiltObserver = Objects.requireNonNull(observer);
+    }
+
     JsonObject getLatestState() {
         final JsonObject state = latestState;
         return state == null ? null : state.deepCopy();
