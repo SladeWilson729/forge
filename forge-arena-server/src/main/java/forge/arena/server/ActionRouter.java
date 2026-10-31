@@ -27,6 +27,8 @@ final class ActionRouter {
     private final JsonSeatRemote remote;
     private final boolean humanSeat;
     private final SeatWriter writer;
+    private volatile String abandonedReason;
+    void abandon(String reason) { abandonedReason = reason; }
     private final ActiveInputTracker classifier = new ActiveInputTracker();
     private final java.util.concurrent.atomic.AtomicLong completed = new java.util.concurrent.atomic.AtomicLong();
     long completedCount() { return completed.get(); }
@@ -38,6 +40,7 @@ final class ActionRouter {
 
     void accept(JsonObject message, java.util.function.Consumer<String> result) {
         try {
+            require(abandonedReason == null, abandonedReason);
             if (message.has("type") && message.get("type").getAsString().equals("setYield")
                     && message.has("kind") && message.get("kind").getAsString().equals("pref")
                     && message.has("name") && message.has("value")) {
@@ -57,7 +60,7 @@ final class ActionRouter {
                 require(humanSeat, "This seat is not yours to play");
                 JsonObject copy = message.deepCopy();
                 FThreads.invokeInEdtLater(() -> {
-                    try { remote.yields().apply(copy); result.accept("accepted"); }
+                    try { require(abandonedReason == null, abandonedReason); remote.yields().apply(copy); result.accept("accepted"); }
                     catch (IllegalArgumentException | IllegalStateException ex) { reject(copy, ex.getMessage()); result.accept("rejected"); }
                     finally { completed.incrementAndGet(); }
                 });
@@ -126,6 +129,7 @@ final class ActionRouter {
     }
 
     private void apply(JsonObject m, String receivedKind, Map<String, Ref> refs, List<Ref> others) {
+        require(abandonedReason == null, abandonedReason);
         Game game = remote.actionGame();
         require(game != null && remote.actionSeat() != null, "The game is not ready");
         Player player = game.getPlayer(remote.actionSeat());

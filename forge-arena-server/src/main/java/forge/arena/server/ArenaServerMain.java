@@ -20,11 +20,8 @@ import forge.model.FModel;
 import forge.player.GamePlayerUtil;
 import forge.player.PlayerControllerHuman;
 
-import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
@@ -107,7 +104,7 @@ public final class ArenaServerMain {
         }
         System.out.println("[arena] WebSocket listening on ws://" + host + ":" + wsServer.getPort() + "/ws");
 
-        try {
+        try (SeatAbandonment console = new SeatAbandonment(wsServer)) {
             final List<SeatProtocolGui> seatViews = new ArrayList<>();
             final HostedMatch match = new HostedMatch() {
                 @Override
@@ -167,8 +164,7 @@ public final class ArenaServerMain {
             final GameOutcome outcome = game.getOutcome();
             System.out.println("[arena] Winner: " + (outcome.isDraw() ? "Draw" : outcome.getWinningLobbyPlayer().getName()));
             if (Boolean.getBoolean("arena.hold")) {
-                System.out.println("[arena] Holding server open. Press Enter to exit.");
-                new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8)).readLine();
+                console.awaitEnter();
             }
         } finally {
             wsServer.close();

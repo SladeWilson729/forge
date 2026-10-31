@@ -8,9 +8,22 @@ import forge.gui.control.WatchLocalGame;
 
 /** In-process protocol boundary for a seat or spectator. */
 public class SeatProtocolGui extends ProtocolGuiGame {
+    private final JsonSeatRemote seatRemote;
     public SeatProtocolGui(final IRemote remote) {
         super(remote);
-        if (remote instanceof JsonSeatRemote seatRemote) seatRemote.attachGui(this);
+        seatRemote = remote instanceof JsonSeatRemote jsonRemote ? jsonRemote : null;
+        if (seatRemote != null) seatRemote.attachGui(this);
+    }
+
+    @Override public void awaitInput(final java.util.concurrent.CountDownLatch done) throws InterruptedException {
+        if (seatRemote != null) seatRemote.beforeInput();
+        try { super.awaitInput(done); }
+        finally { if (seatRemote != null) seatRemote.afterInput(); }
+    }
+
+    @Override public void awaitNextInput() {
+        super.awaitNextInput();
+        if (seatRemote != null) seatRemote.abandonmentSafePoint();
     }
 
     /** Attach before gameplay starts. Never register these watchers with HostedMatch. */

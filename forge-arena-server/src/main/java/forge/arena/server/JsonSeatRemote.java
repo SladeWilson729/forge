@@ -86,6 +86,80 @@ public final class JsonSeatRemote implements IRemote {
     private volatile PromptResponder promptResponder;
     private final PromptCodec promptCodec = new PromptCodec();
     private final ActionRouter actionRouter;
+    private volatile String abandonedReason;
+    private final Object abandonmentLock = new Object(); // Leaf bookkeeping only, never a Forge call or wait.
+    private int inputWaiters;
+    private final CompletableFuture<Void> abandonmentReady = new CompletableFuture<>();
+    private final CompletableFuture<Void> abandonmentApplied = new CompletableFuture<>();
+    private final java.util.concurrent.atomic.AtomicInteger abandonmentInputWaits = new java.util.concurrent.atomic.AtomicInteger();
+    private volatile String seatName = "Unbound seat";
+    private volatile boolean gameFinished;
+    private volatile boolean hasGameState;
+    private final java.util.concurrent.atomic.AtomicInteger abandonmentDefaults = new java.util.concurrent.atomic.AtomicInteger();
+    private volatile String abandonmentCompletionThread;
+    private final java.util.concurrent.ConcurrentLinkedQueue<forge.gamemodes.net.ProtocolMethod> immediateDefaults = new java.util.concurrent.ConcurrentLinkedQueue<>();
+    String abandonedReason() { return abandonedReason; }
+    String seatName() { return seatName; }
+    boolean isHumanSeat() { return registeredPlayer != null; }
+    boolean hasGameState() { return hasGameState; }
+    boolean gameFinished() { return gameFinished; }
+    HostedMatch hostedMatch() { return match; }
+    int abandonmentDefaultCount() { return abandonmentDefaults.get(); }
+    int pendingPromptCount() { return pending.size(); }
+    String abandonmentCompletionThread() { return abandonmentCompletionThread; }
+    List<forge.gamemodes.net.ProtocolMethod> immediateDefaults() { return List.copyOf(immediateDefaults); }
+
+    void beforeInput() {
+        final boolean abandoned;
+        synchronized (abandonmentLock) { inputWaiters++; abandoned = abandonedReason != null; }
+        if (abandoned) abandonmentReady.complete(null);
+    }
+
+    /** Input-latch boundary only: keep a released Game worker parked during the EDT handoff.
+     * Prompts still return their defaults immediately; the EDT never waits on this future.
+     */
+    void afterInput() throws InterruptedException {
+        final boolean abandoned;
+        synchronized (abandonmentLock) {
+            abandoned = abandonedReason != null;
+            if (!abandoned) { inputWaiters--; return; }
+        }
+        try {
+            if (!FThreads.isGuiThread()) {
+                abandonmentInputWaits.incrementAndGet();
+                abandonmentReady.complete(null);
+                abandonmentApplied.get();
+            }
+        }
+        catch (ExecutionException ex) { throw new IllegalStateException(ex.getCause()); }
+        finally { synchronized (abandonmentLock) { inputWaiters--; } }
+    }
+    void whenAbandonmentReady(Runnable handoff) { abandonmentReady.thenRun(handoff); }
+    /** Auto-pass has no Input latch, but this Game-thread boundary is equally safe. */
+    void abandonmentSafePoint() {
+        if (!ThreadUtil.isGameThread() || abandonedReason == null) return;
+        abandonmentReady.complete(null);
+        abandonmentApplied.join(); // No lock held; never reached on the EDT.
+    }
+    int abandonmentInputWaitCount() { return abandonmentInputWaits.get(); }
+    void abandonmentApplied() { abandonmentApplied.complete(null); }
+
+    /** Console thread only. No Forge calls, monitor, or wait while releasing blocked callers. */
+    void abandon(String reason) {
+        final boolean parked;
+        synchronized (abandonmentLock) {
+            if (abandonedReason != null) throw new IllegalStateException("This seat was already abandoned");
+            abandonedReason = reason;
+            parked = inputWaiters > 0;
+        }
+        actionRouter.abandon(reason);
+        pending.values().forEach(request -> {
+            abandonmentCompletionThread = Thread.currentThread().getName();
+            lastReplyThread = abandonmentCompletionThread;
+            if (request.answer.complete(promptCodec.defaultAnswer(request.prompt))) abandonmentDefaults.incrementAndGet();
+        });
+        if (parked) abandonmentReady.complete(null);
+    }
     private final YieldBridge yields = new YieldBridge(this);
     YieldBridge yields() { return yields; }
     void yieldConnected() { FThreads.invokeInEdtLater(yields::connected); }
@@ -367,6 +441,9 @@ public final class JsonSeatRemote implements IRemote {
         snapshotBuiltObserver.accept(state);
         if (eventPump == null) eventPump = new EventPump(seat, ids);
         final boolean gameOver = game.isGameOver();
+        seatName = game.getPlayer(seat).getName();
+        gameFinished = gameOver;
+        hasGameState = true;
         if (gameOver) writer.flushTranscript();
         synchronized (stateLock) {
             if (gameOver) { revealed = new com.google.gson.JsonArray(); revealGeneration++; ids.clearReveals(); }
@@ -421,17 +498,29 @@ public final class JsonSeatRemote implements IRemote {
                 }
                 abilities = java.util.Map.copyOf(offered);
             }
-            if (promptResponder != null) return promptResponder.answer(gui);
             if (gui.getMethod() == forge.gamemodes.net.ProtocolMethod.sideboard) {
                 LOG.log(System.Logger.Level.INFO, "[prompt] sideboard: unchanged main deck (out of v1)");
                 return ((CardPool) gui.getObjects()[1]).toFlatList();
             }
+            if (abandonedReason == null && promptResponder != null) return promptResponder.answer(gui);
             final PromptCodec.Prompt prompt = promptCodec.encode(gui, new PromptCodec.Context(game, seat, ids));
+            if (abandonedReason != null) {
+                abandonmentDefaults.incrementAndGet();
+                immediateDefaults.add(gui.getMethod());
+                lastReplyThread = Thread.currentThread().getName();
+                return promptCodec.defaultAnswer(prompt);
+            }
             final PendingPrompt request = new PendingPrompt(prompt);
             if (pending.putIfAbsent(prompt.requestId(), request) != null) throw new IllegalStateException("Duplicate requestId");
             try {
                 final JsonObject message = prompt.json();
-                writer.send(message);
+                // The console can abandon between encoding and registration. Recheck after
+                // insertion so its pending-map scan and this caller cannot miss each other.
+                if (abandonedReason != null) {
+                    immediateDefaults.add(gui.getMethod());
+                    lastReplyThread = Thread.currentThread().getName();
+                    if (request.answer.complete(promptCodec.defaultAnswer(prompt))) abandonmentDefaults.incrementAndGet();
+                } else writer.send(message);
                 // The writer may already have delivered a resequenced envelope. Never
                 // overwrite that exact replay copy with this initial allocated sequence.
                 request.wire.compareAndSet(null, WsServer.GSON.toJson(message));
@@ -452,6 +541,7 @@ public final class JsonSeatRemote implements IRemote {
 
     /** I/O path: lock-free lookup, pure decoding, future completion. Never dispatch to the EDT. */
     String promptReply(final JsonObject reply) {
+        if (abandonedReason != null) { actionRouter.reject(abandonedReason); return "rejected"; }
         try {
             final int id = PromptCodec.integer(reply.get("requestId"));
             final PendingPrompt request = pending.get(id);
@@ -475,6 +565,7 @@ public final class JsonSeatRemote implements IRemote {
 
     /** Writer-thread reconnect replay. Envelopes retain their seq and requestId, like cached state. */
     List<String> pendingPromptMessages() {
+        if (abandonedReason != null) return List.of();
         return pending.values().stream().filter(request -> !request.answer.isDone() && request.wire.get() != null)
                 .sorted(java.util.Comparator.comparingInt(request -> request.prompt.requestId()))
                 .map(request -> request.wire.get()).toList();

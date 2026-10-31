@@ -55,6 +55,10 @@ public final class SeatWriter implements AutoCloseable {
     private final java.util.concurrent.atomic.AtomicBoolean resyncRequested = new java.util.concurrent.atomic.AtomicBoolean();
     // Only the writer changes the bound channel; I/O reads it to gate seat traffic.
     private volatile Channel channel;
+    private volatile long disconnectedAtNanos;
+    boolean connected() { Channel current = channel; return current != null && current.isActive(); }
+    long disconnectedAtNanos() { return disconnectedAtNanos; }
+    JsonSeatRemote remote() { return remote; }
     private final java.util.Set<Channel> awaitingJoin = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
     private String seatToken;
 
@@ -151,6 +155,7 @@ public final class SeatWriter implements AutoCloseable {
         synchronized (queueLock) {
             transcriptWork.add(() -> {
                 if (transcriptGame != gameId) {
+                    disconnectedAtNanos = connected() ? 0 : System.nanoTime();
                     if (transcript != null) transcript.close();
                     transcriptGame = gameId;
                     transcript = new TranscriptLog(seat, playerId, start.time(), start.nanos());
@@ -171,6 +176,7 @@ public final class SeatWriter implements AutoCloseable {
         transcriptWork.add(() -> {
             awaitingJoin.remove(disconnected);
             if (channel == disconnected && !connectionClosed) {
+                disconnectedAtNanos = System.nanoTime();
                 connectionClosed = true;
                 if (transcript != null) transcript.record("conn", "{\"type\":\"closed\"}", null, System.nanoTime());
                 synchronized (queueLock) {
@@ -423,6 +429,7 @@ public final class SeatWriter implements AutoCloseable {
                     .addListener(ChannelFutureListener.CLOSE);
         }
         channel = connected;
+        disconnectedAtNanos = 0;
         connectionClosed = false;
         if (transcript != null) transcript.record("conn", liveReplacement
                 ? "{\"type\":\"replaced\"}" : "{\"type\":\"connected\"}", null, System.nanoTime());

@@ -130,8 +130,8 @@ final class PromptGameHarness implements AutoCloseable {
             public Object sendAndWait(IdentifiableNetEvent event) {
                 final String caller = Thread.currentThread().getName();
                 final GuiGameEvent guiEvent = (GuiGameEvent) event;
-                System.out.printf("[prompt-test] entering %s requestId=%d caller=%s%n",
-                        guiEvent.getMethod(), guiEvent.getId(), caller);
+                System.out.printf("[prompt-test] entering %s requestId=%d caller=%s abandoned=%s%n",
+                        guiEvent.getMethod(), guiEvent.getId(), caller, remote.abandonedReason());
                 final Object result = remote.sendAndWait(event);
                 final String completion = remote.getLastReplyThread();
                 replyThreads.add(completion);
@@ -146,8 +146,10 @@ final class PromptGameHarness implements AutoCloseable {
             @Override public boolean isLibgdxPort() { return blockingConfirm; }
             @Override public void awaitInput(CountDownLatch done) throws InterruptedException {
                 parked.add(done);
-                try { done.await(); } finally { parked.remove(done); }
+                remote.beforeInput();
+                try { done.await(); } finally { remote.afterInput(); parked.remove(done); }
             }
+            @Override public void awaitNextInput() { super.awaitNextInput(); remote.abandonmentSafePoint(); }
         };
         useClient(client);
         client.connect(HttpClient.newHttpClient(), server.getPort(), "/ws?seat=" + humanSeat);
@@ -447,20 +449,29 @@ final class PromptGameHarness implements AutoCloseable {
     @Override public void close() throws Exception {
         // Release any unanswered socket prompt before trying to post cleanup to a blocked EDT.
         answer = p -> p.get("default");
-        for (JsonObject prompt : prompts) replyClient.send(PromptAssertions.reply(prompt, prompt.get("default")));
+        if (remote.abandonedReason() == null)
+            for (JsonObject prompt : prompts) replyClient.send(PromptAssertions.reply(prompt, prompt.get("default")));
         try {
-            if (game != null && !game.isGameOver()) {
-                action(() -> game.getAction().invoke(() -> {
+            if (game != null) {
+                if (!game.isGameOver()) action(() -> game.getAction().invoke(() -> {
                     for (var player : new ArrayList<>(game.getPlayers())) if (player != human.getPlayer()) player.concede();
                     game.setGameOver(GameEndReason.AllOpponentsLost); human.getInputQueue().onGameOver(true);
                     if (secondaryHuman != null) secondaryHuman.getInputQueue().onGameOver(true);
                 }));
                 assertTrue(finished.await(5, TimeUnit.SECONDS), "End-game hook");
                 until(match::isMatchOver, "post-game flush");
-                action(match::endCurrentGame);
+                // endCurrentGame nulls HostedMatch.game before afterGameEnd sends.
+                // Retire these test GUIs only after the final flush, keeping the
+                // remote from attempting a new live snapshot during GUI teardown.
+                action(() -> {
+                    gui.pause(); if (secondaryGui != null) secondaryGui.pause();
+                    botViews.forEach(SeatProtocolGui::pause);
+                    match.endCurrentGame();
+                });
             }
             healthy();
-            assertTrue(replyThreads.stream().allMatch(t -> t != null && t.startsWith("nioEventLoopGroup-")),
+            assertTrue(replyThreads.stream().allMatch(t -> t != null && (t.startsWith("nioEventLoopGroup-")
+                            || (remote.abandonedReason() != null && (t.equals("Arena-console") || t.startsWith("Game-") || t.startsWith("AWT-EventQueue"))))),
                     "All prompt replies complete on Netty: " + replyThreads);
         } finally { clients.forEach(WsTestClient::close); server.close(); }
     }
