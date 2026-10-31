@@ -310,7 +310,7 @@ public final class SeatWriter implements AutoCloseable {
         }
         for (JsonObject log : newerLogs) { log.addProperty("type", "log"); write(WsServer.GSON.toJson(log)); }
         replayPending = false;
-        if (receiver != null) receiver.requestFullResync();
+        if (receiver != null) { receiver.requestFullResync(); receiver.yieldConnected(); }
     }
 
     private void rememberLog(Outbound message) {

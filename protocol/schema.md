@@ -292,8 +292,8 @@ Both setYield and yieldState use these kind-specific fields in addition to their
 | clearMarker | none | YieldUpdate.ClearMarker |
 | stackYield | `active`: boolean; `respectsInterrupts`: boolean | YieldUpdate.StackYield |
 | untilEndOfTurn | `active`: boolean | YieldUpdate.SetAutoPassUntilEndOfTurn |
-| cardAutoYield | `cardKey`: string; `active`: boolean | YieldUpdate.CardAutoYield |
-| triggerDecision | `storageKey`: string; `decision`: `TriggerDecision` | YieldUpdate.TriggerDecision |
+| cardAutoYield | `cardId`: `CardRef`; `abilityId`: `Int32`; `active`: boolean | YieldUpdate.CardAutoYield |
+| triggerDecision | `cardId`: `CardRef`; `abilityId`: `Int32`; `decision`: `TriggerDecision` | YieldUpdate.TriggerDecision |
 | disableYields | `disabled`: boolean | YieldUpdate.SetDisableYields |
 | disableTriggers | `disabled`: boolean | YieldUpdate.SetDisableTriggers |
 | skipPhase | `turnPlayerId`: `PlayerRef`; `phase`: `PhaseType`; `skip`: boolean | YieldUpdate.SkipPhase |
@@ -303,7 +303,7 @@ Both setYield and yieldState use these kind-specific fields in addition to their
 
 The authenticated seat supplies player fields omitted from the client envelope; the server computes SetMarker.atOrPastAtClick from the live phase. TriggerDecision is ASK/ACCEPT/DECLINE from AutoYieldStore. `pref.value` is a **string**, even for booleans. The preference-name allow list exactly copies YieldController.SYNCED_PREFS (currently 17 names) into YieldPref; no access to its private field is needed. NetGameController computes storage keys through YieldController: per-ability scope uses AutoYieldStore.abilitySuffix(key), and per-card scope retains the full key. This is why the envelope has no isAbilityScope flag. Per-seat highlighting uses UI_SHOW_ACTIONABLE_HIGHLIGHTS and UI_SHOW_AUTOTAP_PREVIEW.
 
-YieldSeed copies the public YieldStateSnapshot record: `cardYields`, `abilityYields`: unique string arrays; `cardTriggerDecisions`, `abilityTriggerDecisions`: string-keyed objects with TriggerDecision values; `autoYieldsDisabled`, `autoTriggersDisabled`: booleans; `prefOverrides`: YieldPref-keyed object of strings; `skipPhases`: Map<PlayerView,EnumSet<PhaseType>> with unresolved JSON object-key representation (E6). The same plan union omits some fields needed to mirror authoritative Forge updates; E6 keeps those open.
+YieldSeed retains the public YieldStateSnapshot field names while replacing raw keys with public references: `cardYields` and `abilityYields` are unique arrays of `{cardId, abilityId}`; trigger-decision buckets are arrays of `{cardId, abilityId, decision}`. `autoYieldsDisabled` and `autoTriggersDisabled` are booleans; `prefOverrides` maps YieldPref names to strings; `skipPhases` is `[{turnPlayerId, phases:[PhaseType]}]`. ServerYieldUpdate adds the computed `atOrPastAtClick` boolean to the setMarker echo. E6 is decided in task 1.13.
 
 ### State snapshot
 
@@ -474,6 +474,16 @@ A snapshot is built only inside Forge-safe setGameView or object-bearing applyDe
 **Transcript JSONL (task 1.9).** Each seat and game has a UTF-8 JSONL file named `YYYY-MM-DD_ForgeArena_Transcript_HHmmss_seatN.jsonl` in `arena.transcriptDir` (default `transcripts/`). If that name exists, `_2`, `_3`, and so on are appended before `.jsonl` until an unused name is created. The first line is `transcriptHeader`, with `protocolVersion`, `serverVersion`, `seat`, `playerId`, and ISO-8601 `startedAt`. Subsequent lines have `t` (milliseconds since game start), `dir` (`out`, `in`, or `conn`) and `msg` (the JSON message or connection marker). An inbound line also has `result` when known (`accepted` or `rejected`). Output records contain only messages actually handed to the socket, including handshake messages and prompt replays; coalesced-away or offline messages are not recorded as output. Connection marker types are `connected`, `replaced`, and `closed`.
 
 
+
+**Per-seat yields (task 1.13).** `setYield` and `yieldState` use all twelve `YieldUpdate` kinds. Player-bearing records infer the acting seat; marker/skip-phase player ids select the turn owner. `setMarker.atOrPastAtClick` is computed on the EDT and appears only in yieldState. `cardAutoYield` and `triggerDecision` require `cardId` plus `abilityId`; stack items expose the live SpellAbility id as optional `abilityId` (absent for stale views). The server verifies the visible card and ability ownership and computes `SpellAbility.yieldKey()` and, for ability scope, `AutoYieldStore.abilitySuffix()`. Raw cardKey/storageKey values are rejected.
+
+`seed.snapshot` retains Forge record field names. `cardYields`/`abilityYields` are arrays of `{cardId, abilityId}`; trigger-decision buckets are arrays of `{cardId, abilityId, decision}`. `skipPhases` is `[{turnPlayerId, phases:[PhaseType]}]`; prefOverrides maps exact YieldPref names to String values. A client seed replaces persistent defaults, not another seat’s state.
+
+The first valid join per game seeds plan 2.6 rules 0/1/2/2b and the rule-3 phase stops. A client seed received first supersedes the defaults; a later explicit client seed replaces them. Reconnect never reseeds. The owner’s PlayerControllerHuman.sendYieldUpdate is the entry point; accepted changes echo through that GUI’s applyYieldUpdate, including automatic yield cancellation.
+
+The allow list is exactly the 17 YieldController.SYNCED_PREFS. YIELD_AUTO_PASS_NO_ACTIONS is global-only because the static toggle helpers bypass overrides; ArenaServerMain sets it true and per-seat pref changes are rejected. A seed may include its matching global value. UI_AUTO_DECISION_MODE is outside that allow list and is held at Forge’s Per Ability (Each Match) baseline. See [yield audit](yield-audit.md) for every read.
+
+
 ## E. Gaps and questions for Will
 
 The original task 1.1 questions are retained below, followed by their plan 3.5 decisions or defaults. E4, E10 and E12 are decided; E8 is decided in task 1.2, E7 in task 1.5 and E5 in task 1.6. The other items use defaults and are finished in the named tasks; E2, E3 and E9 are decided in task 1.8; E6 and E11 retain their current schema shapes until their tasks.
@@ -512,7 +522,7 @@ The original task 1.1 questions are retained below, followed by their plan 3.5 d
 
   Default (plan 3.5): The client sends card and ability ids for yields; the server computes Forge's storage keys. Finished in task 1.13.
 
-  Status: default, finished in task 1.13
+  Status: decided (task 1.13)
 
 - **E7.** Will, what are the complete activeInput kind names and context fields for priority, targeting, mana payment, mulligan and fallback selection? Are selectable/targets the intended names, and where do prompt card, button owner/focus, and showManaPool/hideManaPool state belong?
 

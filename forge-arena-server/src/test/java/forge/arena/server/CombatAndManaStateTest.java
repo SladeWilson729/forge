@@ -183,7 +183,9 @@ public class CombatAndManaStateTest {
             final String p = "p" + seat;
             lines.add(p + "life=" + (seat == 0 ? 2 : 40));
             lines.add(p + "library=" + String.join(";", Collections.nCopies(10, "Forest")));
-            lines.add(p + "hand=" + (seat == 0 ? "Balduvian Bears" + (inputChecks ? ";Shock" : "") : ""));
+            // Memnite costs zero and remains unplayed: after payment, this manual snapshot
+            // scenario still has a legal main-phase action with production APINA enabled.
+            lines.add(p + "hand=" + (seat == 0 ? "Balduvian Bears;Memnite" + (inputChecks ? ";Shock" : "") : ""));
             lines.add(p + "battlefield=" + switch (seat) {
                 case 0 -> "Grizzly Bears;Runeclaw Bear;Forest;Forest;Forest;Birds of Paradise"
                         + (inputChecks ? ";Mountain" : "");

@@ -276,6 +276,9 @@ public final class SeatViewSerializer {
         private JsonObject stackItem(final StackItemView item) {
             final JsonObject result = new JsonObject();
             result.addProperty("stackId", item.getId());
+            for (var live : game.getStack()) {
+                if (live.getId() == item.getId()) { result.addProperty("abilityId", live.getSpellAbility().getId()); break; }
+            }
             final CardInfo source = cardInfo(item.getSourceCard());
             result.add("sourceCardId", source.ref());
             result.add("controllerId", playerRef(item.getActivatingPlayer()));

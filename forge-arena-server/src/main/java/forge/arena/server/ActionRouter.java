@@ -22,7 +22,7 @@ final class ActionRouter {
     private static final System.Logger LOG = System.getLogger(ActionRouter.class.getName());
     private static final ClientMessageSchema SCHEMA = new ClientMessageSchema();
     private static final Set<String> LATER = Set.of("join", "ready", "startGame", "lobbySettings",
-            "setYield", "macroRecord", "macroNext", "macroRepeat");
+            "macroRecord", "macroNext", "macroRepeat");
     private static final Set<String> CARD_FIELDS = Set.of("cardId", "attackerId", "blockerId");
     private final JsonSeatRemote remote;
     private final boolean humanSeat;
@@ -38,6 +38,11 @@ final class ActionRouter {
 
     void accept(JsonObject message, java.util.function.Consumer<String> result) {
         try {
+            if (message.has("type") && message.get("type").getAsString().equals("setYield")
+                    && message.has("kind") && message.get("kind").getAsString().equals("pref")
+                    && message.has("name") && message.has("value")) {
+                YieldBridge.preference(message.get("name").getAsString(), message.get("value").getAsString(), false);
+            }
             SCHEMA.validate(message);
             String type = message.get("type").getAsString();
             if (type.equals("describeAbility")) {
@@ -48,6 +53,16 @@ final class ActionRouter {
                         "Unknown or hidden card reference");
             }
             if (type.equals("submitDeck")) { writer.submitDeck(message); return; }
+            if (type.equals("setYield")) {
+                require(humanSeat, "This seat is not yours to play");
+                JsonObject copy = message.deepCopy();
+                FThreads.invokeInEdtLater(() -> {
+                    try { remote.yields().apply(copy); result.accept("accepted"); }
+                    catch (IllegalArgumentException | IllegalStateException ex) { reject(copy, ex.getMessage()); result.accept("rejected"); }
+                    finally { completed.incrementAndGet(); }
+                });
+                return;
+            }
             LOG.log(System.Logger.Level.INFO, "[action] {0} clientSeq={1} baseSeq={2}", type,
                     message.get("clientSeq"), message.get("baseSeq"));
             if (type.equals("ping")) { JsonObject pong = new JsonObject(); pong.addProperty("type", "pong"); writer.sendFromIo(pong); result.accept("accepted"); return; }

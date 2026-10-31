@@ -46,6 +46,9 @@ public final class ArenaServerMain {
             preferences.setPref(FPref.LOAD_CARD_SCRIPTS_LAZILY, false);
             preferences.setPref(FPref.UI_LANGUAGE, "en-US");
             preferences.setPref(FPref.UI_SHOW_ACTIONABLE_HIGHLIGHTS, true);
+            // YieldController's static APINA helpers bypass per-seat overrides (task 1.13 audit).
+            preferences.setPref(FPref.YIELD_AUTO_PASS_NO_ACTIONS, true);
+            preferences.setPref(FPref.UI_AUTO_DECISION_MODE, forge.localinstance.properties.ForgeConstants.AUTO_DECISION_PER_ABILITY);
             return null;
         });
     }

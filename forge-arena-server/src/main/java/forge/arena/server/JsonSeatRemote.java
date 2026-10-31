@@ -86,6 +86,9 @@ public final class JsonSeatRemote implements IRemote {
     private volatile PromptResponder promptResponder;
     private final PromptCodec promptCodec = new PromptCodec();
     private final ActionRouter actionRouter;
+    private final YieldBridge yields = new YieldBridge(this);
+    YieldBridge yields() { return yields; }
+    void yieldConnected() { FThreads.invokeInEdtLater(yields::connected); }
     private final java.util.Map<Integer, com.google.gson.JsonObject> inputOffers = new java.util.LinkedHashMap<>();
     private final Set<Integer> diagnosedSources = ConcurrentHashMap.newKeySet();
     private static final class PendingPrompt {
@@ -131,6 +134,7 @@ public final class JsonSeatRemote implements IRemote {
         }
         final Object[] args = gui.getObjects();
         switch (gui.getMethod()) {
+            case applyYieldUpdate -> writer.send(yields.encode((forge.gamemodes.match.YieldUpdate) args[0]));
             case setSelection, updateButtons, showPromptMessage, setWeaklySelectable,
                     clearWeaklySelectable, showManaPool, hideManaPool, awaitNextInput -> display(gui);
             case setGameView -> snapshot(List.of());

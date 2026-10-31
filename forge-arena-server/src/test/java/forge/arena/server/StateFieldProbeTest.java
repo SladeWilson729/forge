@@ -67,6 +67,7 @@ public class StateFieldProbeTest {
         private final List<String> failures = new ArrayList<>();
         private final Set<String> invoked = new HashSet<>();
         private final List<StackItemView> castItems = new ArrayList<>();
+        private final List<forge.game.spellability.SpellAbilityStackInstance> castInstances = new ArrayList<>();
         private Game game;
         private ProtocolGuiGame gui;
         private PlayerControllerHuman spectator;
@@ -91,6 +92,7 @@ public class StateFieldProbeTest {
         public void onCast(final GameEventSpellAbilityCast event) {
             if (event.si() != null) {
                 castItems.add(event.si());
+                for (var live : game.getStack()) if (live.getId() == event.si().getId()) castInstances.add(live);
             }
         }
 
@@ -186,6 +188,10 @@ public class StateFieldProbeTest {
                 }
             }
             final Set<StackItemView> items = new HashSet<>(castItems);
+            for (var live : castInstances) {
+                var ability = read("SpellAbilityStackInstance.getSpellAbility", live::getSpellAbility);
+                if (ability != null) read("SpellAbility.getId", ability::getId);
+            }
             for (final StackItemView item : view.getStack()) {
                 items.add(item);
             }

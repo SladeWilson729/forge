@@ -63,6 +63,7 @@ Will performs the full Commander game check manually. Copy the wire log if play 
         <div id="commanderPicker"></div><div id="deckErrors" aria-live="polite"></div>
       </section>
       <section class="panel"><h2>Your action</h2><div id="action"></div></section>
+      <section class="panel"><h2>Yields and phase stops</h2><div id="yields"></div></section>
       <section class="panel"><h2>Combat</h2><div id="combat"></div></section>
       <section class="panel"><h2>Stack</h2><div id="stack"></div></section>
       <section class="panel"><h2>Messages · last 10</h2><div id="messages" aria-live="polite"></div></section>
@@ -98,6 +99,8 @@ Will performs the full Commander game check manually. Copy the wire log if play 
   let reconnectDelay = 1000;
   const tokenKey = `forgeArena.seatToken.${endpoint}`;
   let ownPlayerId = null, cards = new Map(), players = new Map(), stackItems = new Map();
+  const yieldFlags = new Map(), skippedPhases = new Map();
+  const phases = ['UNTAP','UPKEEP','DRAW','MAIN1','COMBAT_BEGIN','COMBAT_DECLARE_ATTACKERS','COMBAT_DECLARE_BLOCKERS','COMBAT_FIRST_STRIKE_DAMAGE','COMBAT_DAMAGE','COMBAT_END','MAIN2','END_OF_TURN','CLEANUP'];
   let lastReply = null, titleTimer = null;
   const pending = new Map(), notices = [], logLines = [], dropdowns = new Map();
   const zones = ['hand', 'battlefield', 'graveyard', 'exile', 'command'];
@@ -266,8 +269,28 @@ Will performs the full Commander game check manually. Copy the wire log if play 
       indexState();
       $('summary').textContent = `Turn ${state.turn} · ${state.phase ?? 'Starting'} · active: ${refName({kind: 'player', id: state.activePlayerId})} · priority: ${refName({kind: 'player', id: state.priorityPlayerId})} · state ${baseSeq}`;
     } else $('summary').textContent = 'Waiting for a state.';
-    renderBoard(); renderAction(); renderStack(); renderCombat(); renderSession();
+    renderBoard(); renderAction(); renderStack(); renderCombat(); renderSession(); renderYields();
     $('promptButtons').querySelectorAll('button').forEach(b => b.disabled = !connected());
+  }
+
+  function renderYields() {
+    const root = $('yields'); root.replaceChildren();
+    const enabled = connected() && !!state;
+    root.append(button(yieldFlags.get('untilEndOfTurn') ? 'Stop end-of-turn yield' : 'Pass until end of turn',
+      () => send('setYield', {kind:'untilEndOfTurn', active:!yieldFlags.get('untilEndOfTurn')}), enabled));
+    root.append(button(yieldFlags.get('stackYield') ? 'Stop resolving stack' : 'Resolve stack',
+      () => send('setYield', {kind:'stackYield', active:!yieldFlags.get('stackYield'), respectsInterrupts:true}), enabled));
+    const full = el('label'), toggle = el('input'); toggle.type = 'checkbox'; toggle.checked = !!yieldFlags.get('disableYields'); toggle.disabled = !enabled;
+    toggle.onchange = () => send('setYield', {kind:'disableYields', disabled:toggle.checked}); full.append(toggle, ' Full control'); root.append(full);
+    for (const player of players.values()) {
+      const group = el('details'); group.append(el('summary', player.id === ownPlayerId ? 'Your turn stops' : `${player.name}: stops`));
+      for (const phase of phases) {
+        const label = el('label'), stop = el('input'); stop.type = 'checkbox'; stop.checked = !skippedPhases.get(player.id)?.has(phase); stop.disabled = !enabled;
+        stop.onchange = () => send('setYield', {kind:'skipPhase', turnPlayerId:player.id, phase, skip:!stop.checked});
+        label.append(stop, ' ' + phase.toLowerCase().replaceAll('_', ' ')); group.append(label, el('br'));
+      }
+      root.append(group);
+    }
   }
 
   // Combat messages express intent; never reproduce InputAttack/InputBlock click sequences here.
@@ -531,6 +554,19 @@ Will performs the full Commander game check manually. Copy the wire log if play 
         try { localStorage.setItem(tokenKey, message.seatToken); }
         catch (error) { notice('Could not save reconnect token: ' + error.message, 'warning'); }
         $('status').textContent = `Connected · seat ${seat}`; render(); break;
+      case 'yieldState':
+        if (message.kind === 'seed') {
+          yieldFlags.set('disableYields', message.snapshot.autoYieldsDisabled);
+          skippedPhases.clear();
+          for (const entry of message.snapshot.skipPhases) skippedPhases.set(entry.turnPlayerId, new Set(entry.phases));
+        } else if (message.kind === 'skipPhase') {
+          const skipped = skippedPhases.get(message.turnPlayerId) ?? new Set();
+          if (message.skip) skipped.add(message.phase); else skipped.delete(message.phase); skippedPhases.set(message.turnPlayerId, skipped);
+        } else if (message.kind === 'untilEndOfTurn' || message.kind === 'stackYield') {
+          if (message.active) { yieldFlags.set('untilEndOfTurn', false); yieldFlags.set('stackYield', false); }
+          yieldFlags.set(message.kind, message.active);
+        } else if (message.kind === 'disableYields') yieldFlags.set(message.kind, message.disabled);
+        renderYields(); break;
       case 'state':
         if (!welcomed || !Number.isSafeInteger(message.seq) || message.seq <= baseSeq) break;
         baseSeq = message.seq; state = message; render(); break;

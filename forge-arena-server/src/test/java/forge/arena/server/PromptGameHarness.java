@@ -60,6 +60,18 @@ final class PromptGameHarness implements AutoCloseable {
     java.util.function.Consumer<List<String>> scenarioLines = lines -> { };
     private long clientSequence;
     private volatile JsonObject receivedState;
+    private boolean sentYieldSeed;
+    JsonSeatRemote secondaryRemote;
+    SeatProtocolGui secondaryGui;
+    WsTestClient secondaryClient;
+    PlayerControllerHuman secondaryHuman;
+    volatile JsonObject secondaryState;
+    volatile boolean secondaryAutoPriority;
+    private Input secondaryAnswered;
+    private final java.util.concurrent.atomic.AtomicLong secondarySequence = new java.util.concurrent.atomic.AtomicLong();
+    final java.util.concurrent.atomic.AtomicInteger secondaryPriorityInputs = new java.util.concurrent.atomic.AtomicInteger();
+    final java.util.concurrent.atomic.AtomicInteger secondaryNoActionPasses = new java.util.concurrent.atomic.AtomicInteger();
+    final java.util.concurrent.atomic.AtomicInteger secondaryOpponentEndInputs = new java.util.concurrent.atomic.AtomicInteger();
     final List<SeatProtocolGui> botViews = new ArrayList<>();
 
     static void initialize() {
@@ -67,6 +79,9 @@ final class PromptGameHarness implements AutoCloseable {
         FModel.getPreferences().setPref(FPref.UI_RECORD_REPLAYS, false);
         FModel.getPreferences().setPref(FPref.UI_SHOW_ACTIONABLE_HIGHLIGHTS, false);
         FModel.getPreferences().setPref(FPref.UI_SHOW_AUTOTAP_PREVIEW, false);
+        // These scenarios manually inspect every priority Input. The yield test exercises
+        // production's global APINA=true separately; all seats here share APINA=false.
+        FModel.getPreferences().setPref(FPref.YIELD_AUTO_PASS_NO_ACTIONS, false);
     }
 
     PromptGameHarness() throws Exception {
@@ -78,14 +93,19 @@ final class PromptGameHarness implements AutoCloseable {
     }
 
     PromptGameHarness(boolean socketActions, int humanSeat) throws Exception {
+        this(socketActions, humanSeat, -1, false);
+    }
+
+    PromptGameHarness(boolean socketActions, int humanSeat, int otherHumanSeat, boolean productionYields) throws Exception {
         this.socketActions = socketActions;
         this.humanSeat = humanSeat;
+        this.sentYieldSeed = productionYields;
         MyRandom.setRandom(new Random(7));
         for (int i = 0; i < 4; i++) {
             Deck deck = new Deck("Prompt " + i); deck.getMain().add("Plains", 99);
             deck.getOrCreate(DeckSection.Commander).add("Isamaru, Hound of Konda", 1);
-            players.add(RegisteredPlayer.forCommander(deck).setPlayer(i == humanSeat
-                    ? new LobbyPlayerHuman("Prompt human") : GamePlayerUtil.createAiPlayer("Prompt AI " + i)));
+            players.add(RegisteredPlayer.forCommander(deck).setPlayer(i == humanSeat || i == otherHumanSeat
+                    ? new LobbyPlayerHuman("Prompt human " + i) : GamePlayerUtil.createAiPlayer("Prompt AI " + i)));
         }
         server.start();
         remote = new JsonSeatRemote(match, players.get(humanSeat), server.writer(humanSeat));
@@ -131,6 +151,57 @@ final class PromptGameHarness implements AutoCloseable {
         };
         useClient(client);
         client.connect(HttpClient.newHttpClient(), server.getPort(), "/ws?seat=" + humanSeat);
+        if (otherHumanSeat >= 0) {
+            secondaryRemote = new JsonSeatRemote(match, players.get(otherHumanSeat), server.writer(otherHumanSeat));
+            secondaryGui = new SeatProtocolGui(secondaryRemote) {
+                @Override public void awaitInput(CountDownLatch done) throws InterruptedException {
+                    if (secondaryHuman == null) secondaryHuman = (PlayerControllerHuman) ArenaServerMain.playerFor(match.getGame(), players.get(otherHumanSeat)).getController();
+                    Game running = match.getGame();
+                    Input input = secondaryHuman.getInputQueue().getInput();
+                    if (input instanceof InputPassPriority) {
+                        secondaryPriorityInputs.incrementAndGet();
+                        if (running.getPhaseHandler().getPhase() == PhaseType.END_OF_TURN
+                                && running.getPhaseHandler().getPlayerTurn() != secondaryHuman.getPlayer()) secondaryOpponentEndInputs.incrementAndGet();
+                    }
+                    parked.add(done); try { done.await(); } finally { parked.remove(done); }
+                }
+                @Override public void awaitNextInput() {
+                    if (secondaryHuman != null && forge.util.ThreadUtil.isGameThread()
+                            && game.getPhaseHandler().getPriorityPlayer() == secondaryHuman.getPlayer()
+                            && !secondaryHuman.getPlayer().getView().hasAvailableActions()) secondaryNoActionPasses.incrementAndGet();
+                    super.awaitNextInput();
+                }
+            };
+            secondaryClient = new WsTestClient(); clients.add(secondaryClient);
+            secondaryClient.onMessage = message -> {
+                if (message.get("type").getAsString().equals("prompt")) secondaryClient.send(PromptAssertions.reply(message, message.get("default")));
+                if (!message.get("type").getAsString().equals("state")) return;
+                try { PromptAssertions.validate(message, "state"); secondaryState = message; }
+                catch (Throwable ex) { failure.compareAndSet(null, ex); }
+                FThreads.invokeInEdtLater(() -> {
+                    if (secondaryHuman == null) return;
+                    Input current = secondaryHuman.getInputQueue().getInput();
+                    if (current == null || current == secondaryAnswered
+                            || !classifier.classify(current).equals(message.getAsJsonObject("activeInput").get("kind").getAsString())) return;
+                    if (current instanceof InputSelectEntitiesFromList<?> entities && entities.getValidChoices().contains(secondaryHuman.getPlayer())) {
+                        secondaryAnswered = current; secondaryAction("selectPlayer", "playerId", new JsonPrimitive(secondaryHuman.getPlayer().getId()));
+                    } else if ((current instanceof InputConfirmMulligan && mulliganDisplayed(message))
+                            || current instanceof InputLondonMulligan || current instanceof InputConfirm
+                            || current instanceof InputAttack || current instanceof InputBlock
+                            || (current instanceof InputPassPriority && secondaryAutoPriority)) {
+                        secondaryAnswered = current; secondaryAction("ok");
+                    }
+                });
+            };
+            secondaryClient.connect(HttpClient.newHttpClient(), server.getPort(), "/ws?seat=" + otherHumanSeat);
+        }
+    }
+
+    void secondaryAction(String type, Object... fields) {
+        JsonObject message = new JsonObject(); message.addProperty("type", type); message.addProperty("clientSeq", secondarySequence.incrementAndGet());
+        message.addProperty("baseSeq", secondaryState == null ? 0 : secondaryState.get("seq").getAsLong());
+        for (int i = 0; i < fields.length; i += 2) message.add((String) fields[i], (JsonElement) fields[i + 1]);
+        PromptAssertions.validate(message, "ClientMessage"); secondaryClient.send(message);
     }
 
     void useClient(WsTestClient transport) {
@@ -142,6 +213,23 @@ final class PromptGameHarness implements AutoCloseable {
                 PromptAssertions.validate(message, "state");
                 if (handSettled) assertOwnHandVisible(message);
                 receivedState = message;
+                if (!sentYieldSeed) {
+                    sentYieldSeed = true;
+                    JsonObject seed = new JsonObject(); seed.addProperty("type", "setYield"); seed.addProperty("kind", "seed");
+                    seed.addProperty("clientSeq", 0); seed.addProperty("baseSeq", message.get("seq").getAsLong());
+                    JsonObject snapshot = new JsonObject(); seed.add("snapshot", snapshot);
+                    for (String field : List.of("cardYields", "abilityYields", "cardTriggerDecisions", "abilityTriggerDecisions")) snapshot.add(field, new JsonArray());
+                    snapshot.addProperty("autoYieldsDisabled", false); snapshot.addProperty("autoTriggersDisabled", false);
+                    JsonArray stops = new JsonArray();
+                    for (JsonElement player : message.getAsJsonArray("players")) {
+                        JsonObject phases = new JsonObject(); phases.add("turnPlayerId", player.getAsJsonObject().get("id")); phases.add("phases", new JsonArray()); stops.add(phases);
+                    }
+                    snapshot.add("skipPhases", stops);
+                    JsonObject prefs = new JsonObject(); for (FPref pref : YieldBridge.SYNCED) prefs.addProperty(pref.name(), FModel.getPreferences().getPref(pref));
+                    snapshot.add("prefOverrides", prefs);
+                    // Saved client settings replace defaults without weakening any scenario assertion.
+                    transport.send(seed);
+                }
             }
             if (!type.equals("prompt")) return;
             PromptAssertions.validate(message, "prompt");
@@ -178,14 +266,20 @@ final class PromptGameHarness implements AutoCloseable {
         });
         match.setEndGameHook(finished::countDown);
         edt(() -> {
-            match.startMatch(GameType.Commander, EnumSet.of(GameType.Commander), players, Map.of(players.get(humanSeat), gui));
+            Map<RegisteredPlayer, forge.gui.interfaces.IGuiGame> guis = new HashMap<>(); guis.put(players.get(humanSeat), gui);
+            if (secondaryGui != null) guis.put(players.stream().filter(p -> p != players.get(humanSeat) && p.getPlayer() instanceof LobbyPlayerHuman).findFirst().orElseThrow(), secondaryGui);
+            match.startMatch(GameType.Commander, EnumSet.of(GameType.Commander), players, guis);
             game = match.getGame(); human = (PlayerControllerHuman) ArenaServerMain.playerFor(game, players.get(humanSeat)).getController();
             System.out.println("[startup] registered=" + players.size() + " live=" + game.getPlayers().size());
             assertEquals(game.getPlayers().size(), 4, "All registered players created before play");
             ownerId = human.getPlayer().getId();
             controller = gui.getGameController(human.getPlayer().getView()); return null;
         });
+        if (secondaryRemote != null) {
+            edt(() -> { secondaryHuman = (PlayerControllerHuman) game.getPlayer(secondaryRemote.actionSeat()).getController(); return null; });
+        }
         assertEquals(client.hello(humanSeat).get("playerId").getAsInt(), ownerId);
+        if (secondaryClient != null) secondaryClient.hello(1);
         // Cold Match.prepareAllZones/CardFactory initialization is not an Input action.
         // Other suite tests used to warm it before our five-second advance deadline;
         // a cold timeout then conceded the bots while prepareAllZones still iterated them.
@@ -359,6 +453,7 @@ final class PromptGameHarness implements AutoCloseable {
                 action(() -> game.getAction().invoke(() -> {
                     for (var player : new ArrayList<>(game.getPlayers())) if (player != human.getPlayer()) player.concede();
                     game.setGameOver(GameEndReason.AllOpponentsLost); human.getInputQueue().onGameOver(true);
+                    if (secondaryHuman != null) secondaryHuman.getInputQueue().onGameOver(true);
                 }));
                 assertTrue(finished.await(5, TimeUnit.SECONDS), "End-game hook");
                 until(match::isMatchOver, "post-game flush");

@@ -545,6 +545,10 @@
           "items": {
             "$ref": "#/$defs/EntityRef"
           }
+        },
+        "abilityId": {
+          "$ref": "#/$defs/Int32",
+          "$comment": "SpellAbility.getId via the live SpellAbilityStackInstance matching StackItemView.getId; absent for a stale view with no live instance."
         }
       },
       "required": [
@@ -899,28 +903,30 @@
         "cardYields": {
           "type": "array",
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/YieldAbilityRef"
           },
           "uniqueItems": true
         },
         "abilityYields": {
           "type": "array",
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/YieldAbilityRef"
           },
           "uniqueItems": true
         },
         "cardTriggerDecisions": {
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/$defs/TriggerDecision"
-          }
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/YieldTriggerRef"
+          },
+          "uniqueItems": true
         },
         "abilityTriggerDecisions": {
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/$defs/TriggerDecision"
-          }
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/YieldTriggerRef"
+          },
+          "uniqueItems": true
         },
         "autoYieldsDisabled": {
           "type": "boolean"
@@ -929,7 +935,27 @@
           "type": "boolean"
         },
         "skipPhases": {
-          "$comment": "forge-gui/src/main/java/forge/gamemodes/match/YieldStateSnapshot.java:28 — Object-keyed map; JSON encoding pending E6."
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "turnPlayerId": {
+                "$ref": "#/$defs/PlayerRef"
+              },
+              "phases": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/PhaseType"
+                },
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "turnPlayerId",
+              "phases"
+            ],
+            "additionalProperties": false
+          }
         },
         "prefOverrides": {
           "type": "object",
@@ -952,7 +978,7 @@
         "prefOverrides"
       ],
       "additionalProperties": false,
-      "$comment": "forge-gui/src/main/java/forge/gamemodes/match/YieldStateSnapshot.java:21 — Field names copied from public record because plan only says snapshot; map encoding remains E6."
+      "$comment": "Task 1.13/E6: references replace raw storage keys; skipPhases is an array because Forge uses PlayerView map keys. Card and ability buckets determine full yieldKey versus abilitySuffix storage scope."
     },
     "YieldUpdate": {
       "oneOf": [
@@ -967,6 +993,18 @@
             },
             "phase": {
               "$ref": "#/$defs/PhaseType"
+            },
+            "type": {
+              "type": "string"
+            },
+            "seq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "clientSeq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "baseSeq": {
+              "$ref": "#/$defs/Sequence"
             }
           },
           "required": [
@@ -974,19 +1012,31 @@
             "phaseOwnerId",
             "phase"
           ],
-          "additionalProperties": true
+          "additionalProperties": false
         },
         {
           "type": "object",
           "properties": {
             "kind": {
               "const": "clearMarker"
+            },
+            "type": {
+              "type": "string"
+            },
+            "seq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "clientSeq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "baseSeq": {
+              "$ref": "#/$defs/Sequence"
             }
           },
           "required": [
             "kind"
           ],
-          "additionalProperties": true
+          "additionalProperties": false
         },
         {
           "type": "object",
@@ -999,6 +1049,18 @@
             },
             "respectsInterrupts": {
               "type": "boolean"
+            },
+            "type": {
+              "type": "string"
+            },
+            "seq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "clientSeq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "baseSeq": {
+              "$ref": "#/$defs/Sequence"
             }
           },
           "required": [
@@ -1006,7 +1068,7 @@
             "active",
             "respectsInterrupts"
           ],
-          "additionalProperties": true
+          "additionalProperties": false
         },
         {
           "type": "object",
@@ -1016,13 +1078,25 @@
             },
             "active": {
               "type": "boolean"
+            },
+            "type": {
+              "type": "string"
+            },
+            "seq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "clientSeq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "baseSeq": {
+              "$ref": "#/$defs/Sequence"
             }
           },
           "required": [
             "kind",
             "active"
           ],
-          "additionalProperties": true
+          "additionalProperties": false
         },
         {
           "type": "object",
@@ -1030,19 +1104,35 @@
             "kind": {
               "const": "cardAutoYield"
             },
-            "cardKey": {
-              "type": "string"
-            },
             "active": {
               "type": "boolean"
+            },
+            "cardId": {
+              "$ref": "#/$defs/CardRef"
+            },
+            "abilityId": {
+              "$ref": "#/$defs/Int32"
+            },
+            "type": {
+              "type": "string"
+            },
+            "seq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "clientSeq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "baseSeq": {
+              "$ref": "#/$defs/Sequence"
             }
           },
           "required": [
             "kind",
-            "cardKey",
-            "active"
+            "active",
+            "cardId",
+            "abilityId"
           ],
-          "additionalProperties": true
+          "additionalProperties": false
         },
         {
           "type": "object",
@@ -1050,19 +1140,35 @@
             "kind": {
               "const": "triggerDecision"
             },
-            "storageKey": {
-              "type": "string"
-            },
             "decision": {
               "$ref": "#/$defs/TriggerDecision"
+            },
+            "cardId": {
+              "$ref": "#/$defs/CardRef"
+            },
+            "abilityId": {
+              "$ref": "#/$defs/Int32"
+            },
+            "type": {
+              "type": "string"
+            },
+            "seq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "clientSeq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "baseSeq": {
+              "$ref": "#/$defs/Sequence"
             }
           },
           "required": [
             "kind",
-            "storageKey",
-            "decision"
+            "decision",
+            "cardId",
+            "abilityId"
           ],
-          "additionalProperties": true
+          "additionalProperties": false
         },
         {
           "type": "object",
@@ -1072,13 +1178,25 @@
             },
             "disabled": {
               "type": "boolean"
+            },
+            "type": {
+              "type": "string"
+            },
+            "seq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "clientSeq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "baseSeq": {
+              "$ref": "#/$defs/Sequence"
             }
           },
           "required": [
             "kind",
             "disabled"
           ],
-          "additionalProperties": true
+          "additionalProperties": false
         },
         {
           "type": "object",
@@ -1088,13 +1206,25 @@
             },
             "disabled": {
               "type": "boolean"
+            },
+            "type": {
+              "type": "string"
+            },
+            "seq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "clientSeq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "baseSeq": {
+              "$ref": "#/$defs/Sequence"
             }
           },
           "required": [
             "kind",
             "disabled"
           ],
-          "additionalProperties": true
+          "additionalProperties": false
         },
         {
           "type": "object",
@@ -1110,6 +1240,18 @@
             },
             "skip": {
               "type": "boolean"
+            },
+            "type": {
+              "type": "string"
+            },
+            "seq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "clientSeq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "baseSeq": {
+              "$ref": "#/$defs/Sequence"
             }
           },
           "required": [
@@ -1118,7 +1260,7 @@
             "phase",
             "skip"
           ],
-          "additionalProperties": true
+          "additionalProperties": false
         },
         {
           "type": "object",
@@ -1132,6 +1274,18 @@
             "value": {
               "type": "string",
               "$comment": "forge-gui/src/main/java/forge/gamemodes/match/YieldUpdate.java:53"
+            },
+            "type": {
+              "type": "string"
+            },
+            "seq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "clientSeq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "baseSeq": {
+              "$ref": "#/$defs/Sequence"
             }
           },
           "required": [
@@ -1139,7 +1293,7 @@
             "name",
             "value"
           ],
-          "additionalProperties": true
+          "additionalProperties": false
         },
         {
           "type": "object",
@@ -1149,28 +1303,52 @@
             },
             "snapshot": {
               "$ref": "#/$defs/YieldSeed"
+            },
+            "type": {
+              "type": "string"
+            },
+            "seq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "clientSeq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "baseSeq": {
+              "$ref": "#/$defs/Sequence"
             }
           },
           "required": [
             "kind",
             "snapshot"
           ],
-          "additionalProperties": true
+          "additionalProperties": false
         },
         {
           "type": "object",
           "properties": {
             "kind": {
               "const": "clearAbilityOrders"
+            },
+            "type": {
+              "type": "string"
+            },
+            "seq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "clientSeq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "baseSeq": {
+              "$ref": "#/$defs/Sequence"
             }
           },
           "required": [
             "kind"
           ],
-          "additionalProperties": true
+          "additionalProperties": false
         }
       ],
-      "$comment": "Plan 2.6: player inferred from authenticated seat and atOrPastAtClick computed server-side. Authoritative yieldState may need additional fields; see E6."
+      "$comment": "Task 1.13: all 12 YieldUpdate records. Server computes keys and marker position. Global-only preferences remain in the exact SYNCED_PREFS enum but per-seat changes are rejected."
     },
     "EventKind": {
       "type": "string",
@@ -3094,7 +3272,7 @@
       "additionalProperties": true,
       "allOf": [
         {
-          "$ref": "#/$defs/YieldUpdate"
+          "$ref": "#/$defs/ServerYieldUpdate"
         }
       ]
     },
@@ -4237,6 +4415,416 @@
         "seatToken"
       ],
       "additionalProperties": false
+    },
+    "YieldAbilityRef": {
+      "type": "object",
+      "properties": {
+        "cardId": {
+          "$ref": "#/$defs/CardRef"
+        },
+        "abilityId": {
+          "$ref": "#/$defs/Int32"
+        }
+      },
+      "required": [
+        "cardId",
+        "abilityId"
+      ],
+      "additionalProperties": false
+    },
+    "YieldTriggerRef": {
+      "type": "object",
+      "properties": {
+        "cardId": {
+          "$ref": "#/$defs/CardRef"
+        },
+        "abilityId": {
+          "$ref": "#/$defs/Int32"
+        },
+        "decision": {
+          "$ref": "#/$defs/TriggerDecision"
+        }
+      },
+      "required": [
+        "cardId",
+        "abilityId",
+        "decision"
+      ],
+      "additionalProperties": false
+    },
+    "ServerYieldUpdate": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "setMarker"
+            },
+            "phaseOwnerId": {
+              "$ref": "#/$defs/PlayerRef"
+            },
+            "phase": {
+              "$ref": "#/$defs/PhaseType"
+            },
+            "type": {
+              "type": "string"
+            },
+            "seq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "clientSeq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "baseSeq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "atOrPastAtClick": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "phaseOwnerId",
+            "phase",
+            "atOrPastAtClick"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "clearMarker"
+            },
+            "type": {
+              "type": "string"
+            },
+            "seq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "clientSeq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "baseSeq": {
+              "$ref": "#/$defs/Sequence"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "stackYield"
+            },
+            "active": {
+              "type": "boolean"
+            },
+            "respectsInterrupts": {
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string"
+            },
+            "seq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "clientSeq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "baseSeq": {
+              "$ref": "#/$defs/Sequence"
+            }
+          },
+          "required": [
+            "kind",
+            "active",
+            "respectsInterrupts"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "untilEndOfTurn"
+            },
+            "active": {
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string"
+            },
+            "seq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "clientSeq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "baseSeq": {
+              "$ref": "#/$defs/Sequence"
+            }
+          },
+          "required": [
+            "kind",
+            "active"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "cardAutoYield"
+            },
+            "active": {
+              "type": "boolean"
+            },
+            "cardId": {
+              "$ref": "#/$defs/CardRef"
+            },
+            "abilityId": {
+              "$ref": "#/$defs/Int32"
+            },
+            "type": {
+              "type": "string"
+            },
+            "seq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "clientSeq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "baseSeq": {
+              "$ref": "#/$defs/Sequence"
+            }
+          },
+          "required": [
+            "kind",
+            "active",
+            "cardId",
+            "abilityId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "triggerDecision"
+            },
+            "decision": {
+              "$ref": "#/$defs/TriggerDecision"
+            },
+            "cardId": {
+              "$ref": "#/$defs/CardRef"
+            },
+            "abilityId": {
+              "$ref": "#/$defs/Int32"
+            },
+            "type": {
+              "type": "string"
+            },
+            "seq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "clientSeq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "baseSeq": {
+              "$ref": "#/$defs/Sequence"
+            }
+          },
+          "required": [
+            "kind",
+            "decision",
+            "cardId",
+            "abilityId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "disableYields"
+            },
+            "disabled": {
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string"
+            },
+            "seq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "clientSeq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "baseSeq": {
+              "$ref": "#/$defs/Sequence"
+            }
+          },
+          "required": [
+            "kind",
+            "disabled"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "disableTriggers"
+            },
+            "disabled": {
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string"
+            },
+            "seq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "clientSeq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "baseSeq": {
+              "$ref": "#/$defs/Sequence"
+            }
+          },
+          "required": [
+            "kind",
+            "disabled"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "skipPhase"
+            },
+            "turnPlayerId": {
+              "$ref": "#/$defs/PlayerRef"
+            },
+            "phase": {
+              "$ref": "#/$defs/PhaseType"
+            },
+            "skip": {
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string"
+            },
+            "seq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "clientSeq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "baseSeq": {
+              "$ref": "#/$defs/Sequence"
+            }
+          },
+          "required": [
+            "kind",
+            "turnPlayerId",
+            "phase",
+            "skip"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "pref"
+            },
+            "name": {
+              "$ref": "#/$defs/YieldPref"
+            },
+            "value": {
+              "type": "string",
+              "$comment": "forge-gui/src/main/java/forge/gamemodes/match/YieldUpdate.java:53"
+            },
+            "type": {
+              "type": "string"
+            },
+            "seq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "clientSeq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "baseSeq": {
+              "$ref": "#/$defs/Sequence"
+            }
+          },
+          "required": [
+            "kind",
+            "name",
+            "value"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "seed"
+            },
+            "snapshot": {
+              "$ref": "#/$defs/YieldSeed"
+            },
+            "type": {
+              "type": "string"
+            },
+            "seq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "clientSeq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "baseSeq": {
+              "$ref": "#/$defs/Sequence"
+            }
+          },
+          "required": [
+            "kind",
+            "snapshot"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "clearAbilityOrders"
+            },
+            "type": {
+              "type": "string"
+            },
+            "seq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "clientSeq": {
+              "$ref": "#/$defs/Sequence"
+            },
+            "baseSeq": {
+              "$ref": "#/$defs/Sequence"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "$comment": "Plan 2.6: player inferred from authenticated seat and atOrPastAtClick computed server-side. Authoritative yieldState may need additional fields; see E6."
     }
   }
 }
