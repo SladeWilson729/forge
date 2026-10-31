@@ -13,9 +13,11 @@ import java.util.regex.Pattern;
 
 /** Text import using Forge's recognizer and Commander rules, without mutating either. */
 public final class DeckImport {
+    private static final Pattern COMMANDER_TAG = Pattern.compile("(?i)\\[Commander[^]]*]");
     private DeckImport() { }
     public record Problem(int line, String text, String message) { }
     private record Source(int line, String text) { }
+    private record ParsedCard(PaperCard card, int quantity) { }
     public record Result(Deck deck, boolean needsCommander, List<String> candidates,
                          List<Problem> errors, List<String> warnings, List<String> commander, int count, String deckName) {
         public boolean ok() { return !needsCommander && errors.isEmpty(); }
@@ -32,6 +34,7 @@ public final class DeckImport {
         Deck deck = new Deck("Imported Commander deck");
         List<Problem> errors = new ArrayList<>(); List<String> warnings = new ArrayList<>();
         Map<String, Source> sources = new LinkedHashMap<>();
+        Map<Integer, ParsedCard> mainLines = new HashMap<>();
         DeckRecognizer recognizer = new DeckRecognizer(); recognizer.setDeckFormatConstraint(DeckFormat.Commander);
         recognizer.setAllowedDeckSections(new ArrayList<>(DeckFormat.Commander.getPrimaryDeckSections()));
         recognizer.forceImportBannedAndRestrictedCards();
@@ -41,8 +44,9 @@ public final class DeckImport {
         for (int i = 0; i < lines.length; i++) {
             String raw = lines[i], line = raw.trim();
             if (line.isBlank()) continue;
-            boolean commanderTag = Pattern.compile("(?i)\\[Commander[^]]*]").matcher(line).find();
-            line = line.replaceAll("(?i)\\[Commander[^]]*]", "").trim();
+            var tag = COMMANDER_TAG.matcher(line);
+            boolean commanderTag = tag.find();
+            line = tag.replaceAll("").trim();
             var heading = recognizer.recognizeLine(line, section);
             if (heading != null && heading.getType() == DeckRecognizer.TokenType.DECK_SECTION_NAME) {
                 section = DeckSection.valueOf(heading.getText()); continue;
@@ -72,6 +76,7 @@ public final class DeckImport {
                     }
                     DeckSection destination = section == DeckSection.Commander ? section : token.getTokenSection() == null ? section : token.getTokenSection();
                     deck.getOrCreate(destination).add(card, token.getQuantity());
+                    if (destination == DeckSection.Main) mainLines.put(i, new ParsedCard(card, token.getQuantity()));
                     sources.putIfAbsent(card.getName(), new Source(i + 1, raw));
                     if (commanderTag) tagged.add(card);
                     if (FModel.getFormats().get("Commander").getBannedCardNames().contains(card.getName()))
@@ -87,7 +92,10 @@ public final class DeckImport {
         List<String> chosen = new ArrayList<>();
         if (deck.getCommanders().isEmpty()) {
             if (!tagged.isEmpty()) chosen.addAll(tagged.stream().map(PaperCard::getName).toList());
-            else if (commanderOverride != null) chosen.addAll(commanderOverride);
+            else {
+                chosen.addAll(trailingCommanderBlock(lines, mainLines));
+                if (chosen.isEmpty() && commanderOverride != null) chosen.addAll(commanderOverride);
+            }
             for (String name : chosen) {
                 PaperCard card = null;
                 for (var entry : deck.getMain()) if (entry.getKey().getName().equalsIgnoreCase(name)) { card = entry.getKey(); break; }
@@ -127,6 +135,29 @@ public final class DeckImport {
         }
         return new Result(errors.isEmpty() && !needs ? deck : null, needs, List.copyOf(candidates), List.copyOf(errors),
                 List.copyOf(warnings), commanders, count, deck.getName());
+    }
+
+    /** MTGO's final blank-separated block, validated by Forge without the main deck's size/CI. */
+    private static List<String> trailingCommanderBlock(String[] lines, Map<Integer, ParsedCard> mainLines) {
+        int end = lines.length - 1;
+        while (end >= 0 && lines[end].isBlank()) end--;
+        int separator = end;
+        while (separator >= 0 && !lines[separator].isBlank()) separator--;
+        if (separator < 0) return List.of();
+        int before = separator;
+        while (before >= 0 && lines[before].isBlank()) before--;
+        if (before < 0) return List.of(); // Leading whitespace alone is not a separate block.
+        Deck probe = new Deck();
+        List<String> names = new ArrayList<>();
+        for (int line = separator + 1; line <= end; line++) {
+            ParsedCard parsed = mainLines.get(line);
+            if (parsed == null || parsed.quantity() != 1 || names.size() == 2 || names.contains(parsed.card().getName()))
+                return List.of();
+            names.add(parsed.card().getName());
+            probe.getOrCreate(DeckSection.Commander).add(parsed.card(), 1);
+        }
+        if (names.isEmpty() || DeckFormat.Commander.getCommanderConformanceProblem(probe) != null) return List.of();
+        return names;
     }
 
     private static void addProblem(List<Problem> errors, Map<String, Source> sources, String name, String message) {

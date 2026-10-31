@@ -536,7 +536,7 @@ The original task 1.1 questions are retained below, followed by their plan 3.5 d
 
   Status: deck import decided (task 1.11); remaining lobby and clock fields finished in task 1.12.
 
-  Deck import resolves explicit Forge sections before Archidekt Commander tags, then the submitted override. Unmarked lists return needsCommander and legal candidates without guessing. Line 0 denotes a whole-deck problem or an override that is absent from the text. Accepted decks are retained per seat for the next game. Banlist hits are warnings under the house rule. `arena.deck.seatN` imports a UTF-8 text file through the same validator during startup; missing commander markings require a marked export for this file-based path.
+  Deck import resolves explicit Forge sections before Archidekt Commander tags, then a legal final MTGO commander block, then the submitted override. The MTGO block must follow a blank separator and contain exactly one legal commander or a legal two-card commander pair; larger or illegal blocks are never selected. Other unmarked lists return needsCommander and legal candidates. Line 0 denotes a whole-deck problem or an override that is absent from the text. Accepted decks are retained per seat for the next game. Banlist hits are warnings under the house rule. `arena.deck.seatN` imports a UTF-8 text file through the same validator during startup; files lacking commander markings or the MTGO convention require a marked export for this file-based path.
 
 - **E12.** Will, confirm that drawOfferAction and updateDrawOffer stay ignored: section 3.3 explicitly excludes draw offers in v1, while this task cites drawOfferAction as a possible gap. No replacement message is added here.
 

@@ -16,15 +16,48 @@ public class DeckImportTest {
                 "moxfield-mtgo-fandaniel.txt", "Fandaniel, Telophoroi Ascian", "archidekt-text-hulk.txt", "Bruce Banner");
         try (var files = Files.list(Path.of("src/test/resources/decks"))) {
             for (Path file : files.filter(Files::isRegularFile).toList()) {
-                var result = DeckImport.parse(Files.readString(file), List.of(commanders.get(file.getFileName().toString())));
+                String text = Files.readString(file);
+                String commander = commanders.get(file.getFileName().toString());
+                var detected = DeckImport.parse(text, List.of());
+                System.out.println("[deck-import] no override " + file + " " + detected.json());
+                if (file.getFileName().toString().equals("archidekt-text-hulk.txt")) {
+                    assertFalse(detected.ok()); assertTrue(detected.needsCommander());
+                    assertTrue(detected.candidates().contains(commander));
+                    assertTrue(detected.commander().isEmpty());
+                } else {
+                    assertTrue(detected.ok(), detected.json().toString()); assertFalse(detected.needsCommander());
+                    assertEquals(detected.commander(), List.of(commander)); assertEquals(detected.count(), 100);
+                }
+                var result = DeckImport.parse(text, List.of(commander));
                 System.out.println("[deck-import] " + file + " " + result.json());
                 assertTrue(result.ok(), result.json().toString()); assertEquals(result.count(), 100);
+                assertEquals(result.commander(), List.of(commander));
             }
         }
     }
 
     private static String deck(String extra, int plains) {
         return "Commander\n1 Isamaru, Hound of Konda\nMain\n" + plains + " Plains\n" + extra;
+    }
+
+    @Test public void trailingCommanderBlockRequiresLegalSmallBlock() {
+        var single = DeckImport.parse("99 Plains\n\n1 Isamaru, Hound of Konda\n\n", List.of());
+        assertTrue(single.ok(), single.json().toString()); assertEquals(single.commander(), List.of("Isamaru, Hound of Konda"));
+        var pair = DeckImport.parse("98 Forest\r\n\r\n1 Wilson, Refined Grizzly\r\n1 Raised by Giants", List.of());
+        assertTrue(pair.ok(), pair.json().toString());
+        assertEquals(new java.util.HashSet<>(pair.commander()), java.util.Set.of("Wilson, Refined Grizzly", "Raised by Giants"));
+        for (String tail : List.of("1 Grizzly Bears", "1 Isamaru, Hound of Konda\n1 Wilson, Refined Grizzly",
+                "1 Isamaru, Hound of Konda\n1 Wilson, Refined Grizzly\n1 Raised by Giants", "2 Isamaru, Hound of Konda",
+                "1 Isamaru, Hound of Konda\n# comment")) {
+            var result = DeckImport.parse("99 Plains\n\n" + tail, List.of());
+            assertTrue(result.needsCommander(), result.json().toString()); assertTrue(result.commander().isEmpty());
+        }
+        assertTrue(DeckImport.parse("99 Plains\n1 Isamaru, Hound of Konda", List.of()).needsCommander());
+        assertTrue(DeckImport.parse("\n1 Isamaru, Hound of Konda", List.of()).needsCommander());
+        var explicit = DeckImport.parse("Commander\n1 Isamaru, Hound of Konda\nMain\n98 Plains\n\n1 Wilson, Refined Grizzly", List.of());
+        assertEquals(explicit.commander(), List.of("Isamaru, Hound of Konda"));
+        var tagged = DeckImport.parse("98 Plains\n1 Isamaru, Hound of Konda [Commander]\n\n1 Wilson, Refined Grizzly", List.of());
+        assertEquals(tagged.commander(), List.of("Isamaru, Hound of Konda"));
     }
 
     @Test(timeOut = 30_000) public void submitDeckStoresOnlyAcceptedDeck() throws Exception {
