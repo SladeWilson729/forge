@@ -30,7 +30,7 @@ import static org.testng.Assert.*;
 /** The 1.4a real human/Input-latch harness, with socket replies instead of a PromptResponder. */
 final class PromptGameHarness implements AutoCloseable {
     final HostedMatch match = new HostedMatch();
-    final WsServer server = new WsServer("127.0.0.1", 0);
+    final WsServer server;
     final JsonSeatRemote remote;
     final SeatProtocolGui gui;
     final WsTestClient client = new WsTestClient();
@@ -67,6 +67,7 @@ final class PromptGameHarness implements AutoCloseable {
     PlayerControllerHuman secondaryHuman;
     volatile JsonObject secondaryState;
     volatile boolean secondaryAutoPriority;
+    Runnable secondaryAutoPassHook = () -> { };
     private Input secondaryAnswered;
     private final java.util.concurrent.atomic.AtomicLong secondarySequence = new java.util.concurrent.atomic.AtomicLong();
     final java.util.concurrent.atomic.AtomicInteger secondaryPriorityInputs = new java.util.concurrent.atomic.AtomicInteger();
@@ -97,6 +98,11 @@ final class PromptGameHarness implements AutoCloseable {
     }
 
     PromptGameHarness(boolean socketActions, int humanSeat, int otherHumanSeat, boolean productionYields) throws Exception {
+        this(socketActions, humanSeat, otherHumanSeat, productionYields, new WsServer("127.0.0.1", 0));
+    }
+
+    PromptGameHarness(boolean socketActions, int humanSeat, int otherHumanSeat, boolean productionYields, WsServer server) throws Exception {
+        this.server = server;
         this.socketActions = socketActions;
         this.humanSeat = humanSeat;
         this.sentYieldSeed = productionYields;
@@ -165,13 +171,17 @@ final class PromptGameHarness implements AutoCloseable {
                         if (running.getPhaseHandler().getPhase() == PhaseType.END_OF_TURN
                                 && running.getPhaseHandler().getPlayerTurn() != secondaryHuman.getPlayer()) secondaryOpponentEndInputs.incrementAndGet();
                     }
-                    parked.add(done); try { done.await(); } finally { parked.remove(done); }
+                    parked.add(done); secondaryRemote.beforeInput();
+                    try { done.await(); } finally { secondaryRemote.afterInput(); parked.remove(done); }
                 }
                 @Override public void awaitNextInput() {
                     if (secondaryHuman != null && forge.util.ThreadUtil.isGameThread()
                             && game.getPhaseHandler().getPriorityPlayer() == secondaryHuman.getPlayer()
                             && !secondaryHuman.getPlayer().getView().hasAvailableActions()) secondaryNoActionPasses.incrementAndGet();
                     super.awaitNextInput();
+                    if (secondaryHuman != null && forge.util.ThreadUtil.isGameThread()
+                            && game.getPhaseHandler().getPriorityPlayer() == secondaryHuman.getPlayer()
+                            && !secondaryHuman.getPlayer().getView().hasAvailableActions()) secondaryAutoPassHook.run();
                 }
             };
             secondaryClient = new WsTestClient(); clients.add(secondaryClient);
@@ -393,7 +403,7 @@ final class PromptGameHarness implements AutoCloseable {
         JsonObject observed = receivedState;
         message.addProperty("baseSeq", observed == null ? 0 : observed.get("seq").getAsLong());
         for (int i = 0; i < fields.length; i += 2) message.add((String) fields[i], (JsonElement) fields[i + 1]);
-        PromptAssertions.validate(message, "ClientMessage"); client.send(message); return message;
+        PromptAssertions.validate(message, "ClientMessage"); replyClient.send(message); return message;
     }
 
     void waitInput(Class<? extends Input> expected) throws Exception {
@@ -454,7 +464,11 @@ final class PromptGameHarness implements AutoCloseable {
         try {
             if (game != null) {
                 if (!game.isGameOver()) action(() -> game.getAction().invoke(() -> {
-                    for (var player : new ArrayList<>(game.getPlayers())) if (player != human.getPlayer()) player.concede();
+                    // If the primary human already conceded, leave a surviving player
+                    // to win. Conceding everyone makes a draw, so Match.isMatchOver()
+                    // never reaches its required victory even with gamesPerMatch=1.
+                    var winner = game.getPlayers().contains(human.getPlayer()) ? human.getPlayer() : game.getPlayers().get(0);
+                    for (var player : new ArrayList<>(game.getPlayers())) if (player != winner) player.concede();
                     game.setGameOver(GameEndReason.AllOpponentsLost); human.getInputQueue().onGameOver(true);
                     if (secondaryHuman != null) secondaryHuman.getInputQueue().onGameOver(true);
                 }));

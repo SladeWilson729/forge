@@ -64,6 +64,8 @@ public final class ArenaServerMain {
     }
 
     public static void main(final String[] args) throws InterruptedException, IOException {
+        try { ChessClock.minutes(System.getProperty("arena.clockMinutes", "0")); }
+        catch (IllegalArgumentException ex) { System.err.println("[arena] " + ex.getMessage()); System.exit(1); return; }
         initializeForge();
         final Set<Integer> humanSeats = humanSeats(System.getProperty("arena.humanSeats", ""));
         final List<RegisteredPlayer> players = new ArrayList<>();

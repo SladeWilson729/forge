@@ -46,6 +46,9 @@ public final class ActiveInputTracker {
     private final Set<Integer> omitted = ConcurrentHashMap.newKeySet();
     private final Consumer<String> diagnostic;
     private final JsonObject values = new JsonObject();
+    private boolean decisionDisplayed;
+    public synchronized boolean decisionDisplayed() { return decisionDisplayed; }
+    public synchronized void decisionFinished() { decisionDisplayed = false; }
     private com.google.gson.JsonArray offered = new JsonArray();
 
     public synchronized void setOffered(JsonArray cards) { offered = cards.deepCopy(); }
@@ -137,6 +140,10 @@ public final class ActiveInputTracker {
             default -> throw new IllegalArgumentException("Not an input display: " + event.getMethod());
         }
         synchronized (this) {
+            if (kind != null && !kind.equals(values.get("kind").getAsString())) decisionDisplayed = false;
+            if ("waiting".equals(kind) || event.getMethod() == forge.gamemodes.net.ProtocolMethod.awaitNextInput) decisionDisplayed = false;
+            else if (kind != null && (event.getMethod() == forge.gamemodes.net.ProtocolMethod.showPromptMessage
+                    || event.getMethod() == forge.gamemodes.net.ProtocolMethod.updateButtons)) decisionDisplayed = true;
             update.entrySet().forEach(entry -> values.add(entry.getKey(), entry.getValue()));
         }
     }

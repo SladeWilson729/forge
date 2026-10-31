@@ -40,14 +40,22 @@ public final class WsServer implements AutoCloseable {
     private final EventLoopGroup workerGroup = new NioEventLoopGroup();
     private final ChannelGroup channels = new DefaultChannelGroup(GlobalEventExecutor.INSTANCE);
     private final SeatWriter[] writers = new SeatWriter[4];
+    private final ChessClock clock;
     private Channel serverChannel;
 
     public WsServer(final String host, final int port) {
+        this(host, port, ChessClock.minutes(System.getProperty("arena.clockMinutes", "0")), System::nanoTime, true);
+    }
+
+    WsServer(String host, int port, int minutes, java.util.function.LongSupplier time, boolean automaticTicks) {
         this.host = host;
         this.port = port;
+        clock = new ChessClock(minutes, time, message -> {
+            for (SeatWriter writer : writers) if (writer != null) writer.sendFromIo(message);
+        }, automaticTicks);
         final java.util.concurrent.ConcurrentMap<Integer, SeatWriter.GameStart> gameStarts = new java.util.concurrent.ConcurrentHashMap<>();
         for (int seat = 0; seat < writers.length; seat++) {
-            writers[seat] = new SeatWriter(seat, gameStarts);
+            writers[seat] = new SeatWriter(seat, gameStarts, clock);
         }
     }
 
@@ -88,10 +96,13 @@ public final class WsServer implements AutoCloseable {
         return writers[seat];
     }
 
+    ChessClock clock() { return clock; }
+
     /** Stop and await both groups on the lifecycle owner thread. */
     @Override
     public void close() {
         checkLifecycleThread();
+        clock.close();
         for (final SeatWriter writer : writers) {
             writer.close();
         }

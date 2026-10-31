@@ -3211,18 +3211,26 @@
         },
         "seq": {
           "$ref": "#/$defs/Sequence"
+        },
+        "seats": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/SeatClock" },
+          "minItems": 4,
+          "maxItems": 4
         }
       },
       "required": [
         "type",
-        "seq"
+        "seq",
+        "seats"
       ],
-      "additionalProperties": true,
-      "$comment": "Plan 3.1: per-seat remainingMs integer and running boolean, but container/id fields and timer source do not exist in this bridge yet (E11)."
+      "additionalProperties": false,
+      "$comment": "Task 1.16: four public rows in wire-seat order. Monotonic server time; no messages in untimed games."
     },
     "SeatClock": {
       "type": "object",
       "properties": {
+        "seat": { "type": "integer", "minimum": 0, "maximum": 3 },
         "remainingMs": {
           "type": "integer",
           "minimum": 0
@@ -3232,6 +3240,7 @@
         }
       },
       "required": [
+        "seat",
         "remainingMs",
         "running"
       ],

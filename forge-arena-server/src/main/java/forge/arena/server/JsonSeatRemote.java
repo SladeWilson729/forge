@@ -13,6 +13,7 @@ import forge.game.player.RegisteredPlayer;
 import forge.gamemodes.match.HostedMatch;
 import forge.gamemodes.match.input.Input;
 import forge.gamemodes.match.input.InputAttack;
+import forge.gamemodes.match.input.InputPassPriority;
 import forge.gamemodes.net.DeltaPacket;
 import forge.gamemodes.net.IRemote;
 import forge.gamemodes.net.event.GuiGameEvent;
@@ -89,6 +90,8 @@ public final class JsonSeatRemote implements IRemote {
     private volatile String abandonedReason;
     private final Object abandonmentLock = new Object(); // Leaf bookkeeping only, never a Forge call or wait.
     private int inputWaiters;
+    private final java.util.Map<Thread, InputPassPriority> priorityWaiters = new java.util.HashMap<>();
+    private List<InputPassPriority> abandonedPriorities = List.of();
     private final CompletableFuture<Void> abandonmentReady = new CompletableFuture<>();
     private final CompletableFuture<Void> abandonmentApplied = new CompletableFuture<>();
     private final java.util.concurrent.atomic.AtomicInteger abandonmentInputWaits = new java.util.concurrent.atomic.AtomicInteger();
@@ -110,8 +113,16 @@ public final class JsonSeatRemote implements IRemote {
     List<forge.gamemodes.net.ProtocolMethod> immediateDefaults() { return List.copyOf(immediateDefaults); }
 
     void beforeInput() {
+        // This is the Input's Forge-safe caller, before it parks. Retain the public
+        // Input object: stop() removes it from InputQueue before the handoff runs.
+        Input input = game != null && seat != null
+                && game.getPlayer(seat).getController() instanceof PlayerControllerHuman human
+                ? human.getInputQueue().getInput() : null;
         final boolean abandoned;
-        synchronized (abandonmentLock) { inputWaiters++; abandoned = abandonedReason != null; }
+        synchronized (abandonmentLock) {
+            inputWaiters++; abandoned = abandonedReason != null;
+            if (input instanceof InputPassPriority priority) priorityWaiters.put(Thread.currentThread(), priority);
+        }
         if (abandoned) abandonmentReady.complete(null);
     }
 
@@ -120,9 +131,15 @@ public final class JsonSeatRemote implements IRemote {
      */
     void afterInput() throws InterruptedException {
         final boolean abandoned;
+        final boolean finished;
         synchronized (abandonmentLock) {
             abandoned = abandonedReason != null;
-            if (!abandoned) { inputWaiters--; return; }
+            if (!abandoned) { inputWaiters--; priorityWaiters.remove(Thread.currentThread()); }
+            finished = inputWaiters == 0;
+        }
+        if (!abandoned) {
+            if (finished) { inputTracker.decisionFinished(); writer.clockInput(false); }
+            return;
         }
         try {
             if (!FThreads.isGuiThread()) {
@@ -132,7 +149,7 @@ public final class JsonSeatRemote implements IRemote {
             }
         }
         catch (ExecutionException ex) { throw new IllegalStateException(ex.getCause()); }
-        finally { synchronized (abandonmentLock) { inputWaiters--; } }
+        finally { synchronized (abandonmentLock) { inputWaiters--; priorityWaiters.remove(Thread.currentThread()); } }
     }
     void whenAbandonmentReady(Runnable handoff) { abandonmentReady.thenRun(handoff); }
     /** Auto-pass has no Input latch, but this Game-thread boundary is equally safe. */
@@ -151,14 +168,29 @@ public final class JsonSeatRemote implements IRemote {
             if (abandonedReason != null) throw new IllegalStateException("This seat was already abandoned");
             abandonedReason = reason;
             parked = inputWaiters > 0;
+            abandonedPriorities = List.copyOf(priorityWaiters.values());
         }
         actionRouter.abandon(reason);
+        writer.clockStop();
         pending.values().forEach(request -> {
             abandonmentCompletionThread = Thread.currentThread().getName();
             lastReplyThread = abandonmentCompletionThread;
             if (request.answer.complete(promptCodec.defaultAnswer(request.prompt))) abandonmentDefaults.incrementAndGet();
         });
         if (parked) abandonmentReady.complete(null);
+    }
+    /** EDT handoff only, while those priority waiters are still parked on abandonmentApplied.
+     * A default ability selected inside the EDT action can survive InputQueue.clearInputs().
+     * PhaseHandler changes priority after concession, then plays that old list through the
+     * NEXT player's controller. Discard the pending action, preserving the legal prompt reply.
+     */
+    void discardAbandonedPriorityChoices() {
+        FThreads.assertExecutedByEdt(true);
+        for (InputPassPriority priority : abandonedPriorities) {
+            List<forge.game.spellability.SpellAbility> chosen = priority.getChosenSa();
+            if (chosen != null) chosen.clear();
+        }
+        abandonedPriorities = List.of();
     }
     private final YieldBridge yields = new YieldBridge(this);
     YieldBridge yields() { return yields; }
@@ -278,6 +310,9 @@ public final class JsonSeatRemote implements IRemote {
             }
         }
         inputTracker.display(event, kind, defenders);
+        // A selection/highlight push alone is not a visible decision. In particular
+        // InputPassPriority can stop itself for a yield before showing any buttons.
+        if (kind != null) writer.clockInput(inputTracker.decisionDisplayed());
         synchronized (stateLock) {
             // A timer can race a full walk. Retain its display in the tracker and let that
             // walk publish it, rather than pairing newly completed ids with the old graph.
@@ -444,6 +479,7 @@ public final class JsonSeatRemote implements IRemote {
         seatName = game.getPlayer(seat).getName();
         gameFinished = gameOver;
         hasGameState = true;
+        writer.clockPlayer(game.getId(), seatName, game.getPlayer(seat).getView().getHasLost(), gameOver);
         if (gameOver) writer.flushTranscript();
         synchronized (stateLock) {
             if (gameOver) { revealed = new com.google.gson.JsonArray(); revealGeneration++; ids.clearReveals(); }
@@ -512,6 +548,7 @@ public final class JsonSeatRemote implements IRemote {
             }
             final PendingPrompt request = new PendingPrompt(prompt);
             if (pending.putIfAbsent(prompt.requestId(), request) != null) throw new IllegalStateException("Duplicate requestId");
+            writer.clockPrompt(prompt.requestId(), true);
             try {
                 final JsonObject message = prompt.json();
                 // The console can abandon between encoding and registration. Recheck after
@@ -532,6 +569,7 @@ public final class JsonSeatRemote implements IRemote {
             } catch (ExecutionException ex) {
                 throw new IllegalStateException("Prompt failed", ex.getCause());
             } finally {
+                writer.clockPrompt(prompt.requestId(), false);
                 pending.remove(prompt.requestId(), request); // Waiting thread, never Netty I/O.
             }
         }
@@ -552,7 +590,10 @@ public final class JsonSeatRemote implements IRemote {
             final Object answer = promptCodec.decode(request.prompt, reply);
             final String thread = Thread.currentThread().getName();
             lastReplyThread = thread;
-            if (request.answer.complete(answer)) LOG.log(System.Logger.Level.INFO, "[prompt] Completed {0} on {1}", id, thread);
+            if (request.answer.complete(answer)) {
+                writer.clockPrompt(id, false);
+                LOG.log(System.Logger.Level.INFO, "[prompt] Completed {0} on {1}", id, thread);
+            }
             return "accepted";
         } catch (IllegalArgumentException | IllegalStateException ex) {
             final JsonObject message = new JsonObject();

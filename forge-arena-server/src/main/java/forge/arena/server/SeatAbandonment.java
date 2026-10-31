@@ -42,6 +42,8 @@ final class SeatAbandonment implements AutoCloseable {
     SeatAbandonment(WsServer server, Reader input, PrintStream out, long seconds, LongSupplier clock) {
         if (seconds < 0) throw new IllegalArgumentException("arena.abandonAfterSeconds must be zero or positive");
         this.server = server; this.out = out; this.clock = clock; this.graceNanos = TimeUnit.SECONDS.toNanos(seconds);
+        server.clock().onTimeout((seat, name) -> outputMessages.add("[arena] Seat " + seat + " (" + name
+                + ") is out of time: keep " + seat + " or concede " + seat));
         console = new Thread(this::run, "Arena-console"); console.setDaemon(true); console.start();
         Thread reader = new Thread(() -> {
             BufferedReader lines = new BufferedReader(input);
@@ -121,12 +123,21 @@ final class SeatAbandonment implements AutoCloseable {
                 reply(command, seats.toString().stripTrailing()); return;
             }
             String[] parts = text.split("\\s+");
-            if (parts.length != 2 || !java.util.Set.of("wait", "concede", "bot").contains(parts[0]))
-                throw new IllegalArgumentException("Commands: seats, wait N, concede N, bot N");
+            if (parts.length != 2 || !java.util.Set.of("wait", "concede", "bot", "keep").contains(parts[0]))
+                throw new IllegalArgumentException("Commands: seats, wait N, concede N, bot N, keep N");
             int seat;
             try { seat = Integer.parseInt(parts[1]); } catch (NumberFormatException ex) { throw new IllegalArgumentException("Seat must be 0..3"); }
             SeatWriter writer = server.writer(seat); JsonSeatRemote remote = writer.remote();
-            if (writer.connected()) throw new IllegalArgumentException("Seat " + seat + " is connected");
+            boolean expired = server.clock().expired(seat);
+            if (parts[0].equals("keep")) {
+                if (!expired) throw new IllegalArgumentException("Seat " + seat + " is not out of time");
+                server.clock().keep(seat).thenAccept(accepted -> {
+                    String message = accepted ? "[arena] Seat " + seat + " continues untimed" : "[arena] Seat " + seat + " is no longer out of time";
+                    outputMessages.add(message); command.result().complete(message);
+                });
+                return;
+            }
+            if (writer.connected() && !(expired && parts[0].equals("concede"))) throw new IllegalArgumentException("Seat " + seat + " is connected");
             if (remote == null || !remote.isHumanSeat() || !remote.hasGameState()) throw new IllegalArgumentException("Seat " + seat + " has no human game to abandon");
             if (remote.gameFinished()) throw new IllegalArgumentException("The game has ended");
             if (remote.abandonedReason() != null) throw new IllegalArgumentException(remote.abandonedReason());
@@ -160,6 +171,7 @@ final class SeatAbandonment implements AutoCloseable {
                         human.getInputQueue().clearInputs();
                         remote.hostedMatch().tallyNextGameDecisions();
                     } else {
+                        remote.discardAbandonedPriorityChoices();
                         human.concede();
                         // Forge only releases queues in concede() if the WHOLE game ended.
                         // A multiplayer loser must also release its own parked Input.

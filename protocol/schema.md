@@ -213,13 +213,13 @@ All server messages require `seq: integer >= 0`, increasing per seat. Client gam
 | `promptCancel` | `requestId`: `RequestId` | New pending-request lifecycle; no ProtocolMethod equivalent |
 | `message` | `level`: enum `"info"`, `"warning"`, `"error"`, `"rejected"`; `text`: string; `title?`: string | message, showErrorDialog, flashIncorrectAction; ActionRouter stale-action rejection |
 | `macroState` | `recording`: boolean; `replaying`: boolean; `hasActions`: boolean | applyMacroState(IMacroSystem.State) |
-| `clock` | none specified (see note below) | New timed-seat service; no ProtocolMethod |
+| `clock` | `seats`: four `SeatClock` rows in wire-seat order (`seat`, `remainingMs`, `running`) | ChessClock; displayed decisions, prompt futures, bound connections and terminal snapshots feed copied transitions |
 | `yieldState` | `kind`: enum `"setMarker"`, `"clearMarker"`, `"stackYield"`, `"untilEndOfTurn"`, `"cardAutoYield"`, `"triggerDecision"`, `"disableYields"`, `"disableTriggers"`, `"skipPhase"`, `"pref"`, `"seed"`, `"clearAbilityOrders"` | applyYieldUpdate(YieldUpdate) |
 | `pong` | none specified (see note below) | WsServer heartbeat reply; no ProtocolMethod |
 | `attention` | none | alertUser; taskbar flash when the action is on this seat and the window is not focused |
 | `abilityDescription` | `cardId`: `CardRef`; `text`: string | getActivateDescription reply to describeAbility; finished in task 1.12 area |
 
-`lobby` describes seats, names (strings), deck status (representation unspecified), ready flags (booleans); exact nesting is E11. `deckResult` also needs parsed commander (identity representation unspecified) and count (integer), whose field names are absent from 3.1. `clock` contains per-seat `remainingMs: integer >= 0` and `running: boolean` (`SeatClock`), but its container and seat-id field are unspecified. `logTail.entries` contains the last 200 filtered entries on reconnect/resync; each entry requires text, entryType and its original seq. `log.type` remains `log`, and required `entryType` uses Forge enum names rather than captions (plan 3.5 E2; finished in task 1.8). GameLogEntryType values: `GAME_OUTCOME`, `MATCH_RESULTS`, `TURN`, `MULLIGAN`, `ANTE`, `DRAFT`, `ZONE_CHANGE`, `PLAYER_CONTROL`, `DAMAGE`, `LIFE`, `LAND`, `DISCARD`, `COMBAT`, `INFORMATION`, `STACK_RESOLVE`, `STACK_ADD`, `EFFECT_REPLACED`, `MANA`, `PHASE`. `pong` has no further plan fields.
+`lobby` describes seats, names (strings), deck status (representation unspecified), ready flags (booleans); exact nesting is E11. `deckResult` also needs parsed commander (identity representation unspecified) and count (integer), whose field names are absent from 3.1. `clock` contains per-seat `remainingMs: integer >= 0` and `running: boolean` (`SeatClock`), in the seats array with a wire seat identifier (task 1.16). `logTail.entries` contains the last 200 filtered entries on reconnect/resync; each entry requires text, entryType and its original seq. `log.type` remains `log`, and required `entryType` uses Forge enum names rather than captions (plan 3.5 E2; finished in task 1.8). GameLogEntryType values: `GAME_OUTCOME`, `MATCH_RESULTS`, `TURN`, `MULLIGAN`, `ANTE`, `DRAFT`, `ZONE_CHANGE`, `PLAYER_CONTROL`, `DAMAGE`, `LIFE`, `LAND`, `DISCARD`, `COMBAT`, `INFORMATION`, `STACK_RESOLVE`, `STACK_ADD`, `EFFECT_REPLACED`, `MANA`, `PHASE`. `pong` has no further plan fields.
 
 ### Client to server
 
@@ -355,7 +355,7 @@ The state envelope flattens StateSnapshot alongside type/seq, matching section 3
 | StackItem | `stackId`: `Int32`; `sourceCardId`: `CardRef`; `controllerId`: `PlayerRef`; `text`: string; `targets`: array of `EntityRef` |
 | ActiveInput | `kind`: enum (see below); `prompt?`: string; `sourceCardId?`: `CardRef`; `manaPoolOpen?`: boolean; `okLabel?`: string; `cancelLabel?`: string; `buttons?`: object; `highlighted?`: array of object; `chosen?`: array of `EntityRef`; `attackTargets?`: array of `EntityRef`; `min?`: `Int32`; `max?`: `Int32`; `selectable?`: array of `CardRef`; `targets?`: array of `EntityRef`; `offered?`: array of `InputCardOffer` |
 | InputCardOffer | `cardRef`: `CardRef`; `label`: string; `name?`: string; `set?`: string; `num?`: string |
-| SeatClock | `remainingMs`: integer; `running`: boolean |
+| SeatClock | `seat`: integer 0..3; `remainingMs`: integer >= 0; `running`: boolean |
 
 Task 1.10: `hello.playerId` is the controlled Forge player id resolved from the seat's RegisteredPlayer, never the seat index (HostedMatch sorts humans first). Startup connections wait for that binding; the browser has no player selector. `types` uses CardStateView.getType().toString() (CardView.java:1361; CardType.java:609), with the same identity gating as name. VisibleCard may use an authorized alternate identity; FaceDownCard uses only the public current face, never the hidden alternate, and HiddenCard has no types. ArenaServerMain enables UI_SHOW_ACTIONABLE_HIGHLIGHTS. Combat declarations appear only for highlighted cards; type text is not a legality check. Forge drops declared attackers from highlights, so they retain a Remove attacker button.
 
@@ -496,6 +496,16 @@ The first valid join per game seeds plan 2.6 rules 0/1/2/2b and the rule-3 phase
 The allow list is exactly the 17 YieldController.SYNCED_PREFS. YIELD_AUTO_PASS_NO_ACTIONS is global-only because the static toggle helpers bypass overrides; ArenaServerMain sets it true and per-seat pref changes are rejected. A seed may include its matching global value. UI_AUTO_DECISION_MODE is outside that allow list and is held at Forge’s Per Ability (Each Match) baseline. See [yield audit](yield-audit.md) for every read.
 
 
+### Optional chess clock (task 1.16, M3/M9)
+
+`arena.clockMinutes=0|30|45` assigns the same budget to every wire seat. Zero (default) sends no clock messages; other values fail startup with a readable error. Lobby settings remain deferred; their planned clock choices are unchanged.
+
+`clock {type:"clock", seq, seats:[{seat, remainingMs, running}, ...]}` has exactly four public rows in wire-seat order. Values are nonnegative integer milliseconds rounded up from monotonic nanoseconds. Each game resets the budget. One Arena-clock scheduler owns accounting; producers enqueue copied input/prompt/connection/terminal transitions with their monotonic timestamps. No scheduler callback reads Forge. Clock messages use normal per-seat sequencing and transcript delivery.
+
+A displayed non-waiting ActiveInput with prompt text/buttons, or an open prompt future, counts as deciding. All input kinds that ask for a decision (including mulligan and confirm) qualify. Bare selection/highlight pushes do not start a clock; auto-passed priority never displays a decision and costs zero. Input completion/awaitNextInput and prompt completion stop those sources. Duplicate notifications are idempotent. The newest decision source owns the single running slot; overlapping input/prompt sources for that decision never double-charge. A disconnected or expired owner does not make a stale older input run instead.
+
+The clock pauses without a bound socket, resumes only on valid rejoin, and stops permanently for an abandoned or eliminated seat and at game end. All seats receive the public values immediately on start/stop/pause/rejoin and once per second while any seat is running. At zero a seat gets exactly one warning broadcast: `message {level:"warning", text:"<name> is out of time; waiting for the host"}`. The game does not auto-concede or answer its prompts. The host console offers `keep N` (that seat continues untimed for this game, reporting zero and running=false) or `concede N` (the exact task 1.14 flag/default-future/safe-EDT concession path, also permitted for a connected expired seat). The browser shows each wire seat's remaining time and a running marker.
+
 ## E. Gaps and questions for Will
 
 The original task 1.1 questions are retained below, followed by their plan 3.5 decisions or defaults. E4, E10 and E12 are decided; E8 is decided in task 1.2, E7 in task 1.5 and E5 in task 1.6. The other items use defaults and are finished in the named tasks; E2, E3 and E9 are decided in task 1.8; E6 and E11 retain their current schema shapes until their tasks.
@@ -564,7 +574,7 @@ The original task 1.1 questions are retained below, followed by their plan 3.5 d
 
   Default (plan 3.5): Lobby, deck result and clock shapes are defined with the lobby work. Finished in task 1.11, 1.12.
 
-  Status: deck import decided (task 1.11); remaining lobby and clock fields finished in task 1.12.
+  Status: deck import decided (task 1.11); clock shape decided (task 1.16); remaining lobby fields deferred to lobby work.
 
   Deck import resolves explicit Forge sections before Archidekt Commander tags, then a legal final MTGO commander block, then the submitted override. The MTGO block must follow a blank separator and contain exactly one legal commander or a legal two-card commander pair; larger or illegal blocks are never selected. Other unmarked lists return needsCommander and legal candidates. Line 0 denotes a whole-deck problem or an override that is absent from the text. Accepted decks are retained per seat for the next game. Banlist hits are warnings under the house rule. `arena.deck.seatN` imports a UTF-8 text file through the same validator during startup; files lacking commander markings or the MTGO convention require a marked export for this file-based path.
 

@@ -52,6 +52,7 @@ Will performs the full Commander game check manually. Copy the wire log if play 
     <p><code id="endpoint"></code></p>
     <div id="sessionControls" class="row"></div>
     <p id="summary">Waiting for a state.</p>
+    <p id="clocks" hidden></p>
   </header>
   <main class="layout">
     <div id="board" aria-label="Players and zones"></div>
@@ -97,6 +98,7 @@ Will performs the full Commander game check manually. Copy the wire log if play 
   $('endpoint').textContent = endpoint;
   let socket, welcomed = false, state = null, baseSeq = -1, clientSeq = 0;
   let reconnectDelay = 1000;
+  let clocks = [];
   const tokenKey = `forgeArena.seatToken.${endpoint}`;
   let ownPlayerId = null, cards = new Map(), players = new Map(), stackItems = new Map();
   const yieldFlags = new Map(), skippedPhases = new Map();
@@ -269,8 +271,16 @@ Will performs the full Commander game check manually. Copy the wire log if play 
       indexState();
       $('summary').textContent = `Turn ${state.turn} · ${state.phase ?? 'Starting'} · active: ${refName({kind: 'player', id: state.activePlayerId})} · priority: ${refName({kind: 'player', id: state.priorityPlayerId})} · state ${baseSeq}`;
     } else $('summary').textContent = 'Waiting for a state.';
-    renderBoard(); renderAction(); renderStack(); renderCombat(); renderSession(); renderYields();
+    renderBoard(); renderAction(); renderStack(); renderCombat(); renderSession(); renderYields(); renderClocks();
     $('promptButtons').querySelectorAll('button').forEach(b => b.disabled = !connected());
+  }
+
+  function renderClocks() {
+    $('clocks').hidden = !clocks.length;
+    $('clocks').textContent = clocks.map(row => {
+      const seconds = Math.ceil(row.remainingMs / 1000);
+      return `Seat ${row.seat}${row.seat === seat ? ' (you)' : ''}: ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}${row.running ? ' ▶ running' : ''}`;
+    }).join(' · ');
   }
 
   function renderYields() {
@@ -534,6 +544,7 @@ Will performs the full Commander game check manually. Copy the wire log if play 
         break;
       }
       case 'hello':
+        clocks = [];
         ownPlayerId = Number.isInteger(message.playerId) ? message.playerId : null;
         const compatible = message.protocolVersion === 1 && message.seat === seat && ownPlayerId !== null;
         welcomed = false;
@@ -554,6 +565,8 @@ Will performs the full Commander game check manually. Copy the wire log if play 
         try { localStorage.setItem(tokenKey, message.seatToken); }
         catch (error) { notice('Could not save reconnect token: ' + error.message, 'warning'); }
         $('status').textContent = `Connected · seat ${seat}`; render(); break;
+      case 'clock':
+        clocks = list(message.seats); renderClocks(); break;
       case 'yieldState':
         if (message.kind === 'seed') {
           yieldFlags.set('disableYields', message.snapshot.autoYieldsDisabled);
@@ -610,6 +623,7 @@ Will performs the full Commander game check manually. Copy the wire log if play 
     };
     socket.onerror = () => { $('status').textContent = 'Connection error; check the server.'; };
     socket.onclose = event => {
+      clocks = clocks.map(row => ({...row, running:false}));
       const delay = reconnectDelay; reconnectDelay = Math.min(8000, reconnectDelay * 2);
       welcomed = false; $('status').textContent = `${event.code === 4001 ? 'Seat taken. ' : ''}Disconnected (${event.code}) ${event.reason}. Reconnecting in ${delay / 1000} s…`;
       render(); setTimeout(connect, delay);

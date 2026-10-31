@@ -45,6 +45,7 @@ public final class SeatWriter implements AutoCloseable {
     private volatile JsonSeatRemote remote;
     private final Thread thread;
     private final int seat;
+    private final ChessClock clock;
     private final java.util.concurrent.ConcurrentMap<Integer, GameStart> gameStarts;
     private volatile String hello;
     private Outbound pendingState;
@@ -128,8 +129,13 @@ public final class SeatWriter implements AutoCloseable {
     }
 
     SeatWriter(final int seat, final java.util.concurrent.ConcurrentMap<Integer, GameStart> gameStarts) {
+        this(seat, gameStarts, null);
+    }
+
+    SeatWriter(int seat, java.util.concurrent.ConcurrentMap<Integer, GameStart> gameStarts, ChessClock clock) {
         this.seat = seat;
         this.gameStarts = gameStarts;
+        this.clock = clock;
         thread = new Thread(this::run, "Arena-seat-writer-" + seat);
         thread.setDaemon(true);
         thread.start();
@@ -173,6 +179,7 @@ public final class SeatWriter implements AutoCloseable {
     }
 
     void disconnected(Channel disconnected) {
+        if (clock != null && channel == disconnected) clock.connected(seat, false);
         transcriptWork.add(() -> {
             awaitingJoin.remove(disconnected);
             if (channel == disconnected && !connectionClosed) {
@@ -236,6 +243,13 @@ public final class SeatWriter implements AutoCloseable {
     }
 
     void attachRemote(final JsonSeatRemote remote) { this.remote = remote; }
+
+    void clockPlayer(int game, String name, boolean eliminated, boolean ended) {
+        if (clock != null) clock.player(seat, game, name, eliminated, ended);
+    }
+    void clockInput(boolean deciding) { if (clock != null) clock.input(seat, deciding); }
+    void clockPrompt(int requestId, boolean open) { if (clock != null) clock.prompt(seat, requestId, open); }
+    void clockStop() { if (clock != null) clock.stop(seat); }
 
     /** Netty never takes queueLock; sequencing/queue insertion happens on the writer thread. */
     void sendFromIo(final JsonObject message) {
@@ -435,6 +449,7 @@ public final class SeatWriter implements AutoCloseable {
                     .addListener(ChannelFutureListener.CLOSE);
         }
         channel = connected;
+        if (clock != null) clock.connected(seat, true);
         disconnectedAtNanos = 0;
         connectionClosed = false;
         if (transcript != null) transcript.record("conn", liveReplacement
