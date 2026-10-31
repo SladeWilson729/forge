@@ -40,6 +40,13 @@ final class ActionRouter {
         try {
             SCHEMA.validate(message);
             String type = message.get("type").getAsString();
+            if (type.equals("describeAbility")) {
+                JsonElement ref = message.get("cardId");
+                require(ref.isJsonPrimitive() && ref.getAsJsonPrimitive().isNumber(), "That card's identity is hidden");
+                int id = ref.getAsInt();
+                require(remote.getIds().currentRef(id).filter(current -> current instanceof Integer n && n == id).isPresent(),
+                        "Unknown or hidden card reference");
+            }
             if (type.equals("submitDeck")) { writer.submitDeck(message); return; }
             LOG.log(System.Logger.Level.INFO, "[action] {0} clientSeq={1} baseSeq={2}", type,
                     message.get("clientSeq"), message.get("baseSeq"));
@@ -153,6 +160,8 @@ final class ActionRouter {
                 controller.reorderHand(card.getView(), index);
             }
             case "describeAbility" -> {
+                require(forge.arena.server.view.CardVisibility.forSeat(card.getView(), remote.actionSeat()).identityVisible(),
+                        "That card's identity is hidden");
                 JsonObject response = new JsonObject(); response.addProperty("type", "abilityDescription");
                 response.add("cardId", m.get("cardId")); response.addProperty("text", Objects.toString(controller.getActivateDescription(card.getView()), "")); writer.send(response);
             }

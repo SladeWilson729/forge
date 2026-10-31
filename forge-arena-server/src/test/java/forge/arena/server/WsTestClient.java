@@ -17,6 +17,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNotNull;
+import static org.testng.Assert.assertNull;
 
 final class WsTestClient implements WebSocket.Listener, AutoCloseable {
     record Received(String json, long at) {
@@ -32,9 +33,14 @@ final class WsTestClient implements WebSocket.Listener, AutoCloseable {
     volatile Throwable error;
     volatile long openedAt;
     private WebSocket socket;
+    private final Object sendLock = new Object();
+    private java.util.concurrent.CompletableFuture<Void> sent = java.util.concurrent.CompletableFuture.completedFuture(null);
+    private int port;
+    private static final java.util.concurrent.ConcurrentMap<String, String> TOKENS = new java.util.concurrent.ConcurrentHashMap<>();
     volatile java.util.function.Consumer<JsonObject> onMessage;
 
     void connect(final HttpClient http, final int port, final String path) throws Exception {
+        this.port = port;
         socket = http.newWebSocketBuilder().connectTimeout(Duration.ofSeconds(5))
                 .buildAsync(URI.create("ws://127.0.0.1:" + port + path), this).get(5, TimeUnit.SECONDS);
     }
@@ -89,8 +95,16 @@ final class WsTestClient implements WebSocket.Listener, AutoCloseable {
         assertEquals(hello.get("serverVersion").getAsString(), "1.4-dev");
         assertEquals(hello.get("seat").getAsInt(), seat);
         assertEquals(hello.get("seq").getAsLong(), 0L);
+        JsonObject join = new JsonObject(); join.addProperty("type", "join"); join.addProperty("name", "Test seat " + seat);
+        join.addProperty("protocolVersion", 1);
+        String token = TOKENS.get(port + ":" + seat);
+        if (token != null) join.addProperty("seatToken", token);
+        send(join);
+        JsonObject joined = receive(); PromptAssertions.validate(joined, "joined");
+        assertEquals(joined.get("type").getAsString(), "joined");
+        TOKENS.put(port + ":" + seat, joined.get("seatToken").getAsString());
         final JsonObject tail = receive();
-        assertEquals(tail.get("type").getAsString(), "logTail", "Second handshake message");
+        assertEquals(tail.get("type").getAsString(), "logTail", "Third handshake message");
         assertEquals(tail.get("seq").getAsLong(), 0L, "logTail is a preamble");
         PromptAssertions.validate(tail, "logTail");
         return hello;
@@ -100,13 +114,22 @@ final class WsTestClient implements WebSocket.Listener, AutoCloseable {
         return List.copyOf(history);
     }
 
+    int closeCode() throws Exception { assertEquals(closed.await(5, TimeUnit.SECONDS), true); return closeCode; }
+    void assertQuiet() throws Exception { assertNull(messages.poll(200, TimeUnit.MILLISECONDS)); }
+
     void send(final JsonObject message) {
         sendRaw(WsServer.GSON.toJson(message));
     }
 
     void sendRaw(final String text) {
-        socket.sendText(text, true)
-                .whenComplete((ignored, ex) -> { if (ex != null) error = ex; });
+        final java.util.concurrent.CompletableFuture<Void> previous;
+        final var complete = new java.util.concurrent.CompletableFuture<Void>();
+        synchronized (sendLock) { previous = sent; sent = complete; }
+        // HttpClient permits only one outstanding sendText; never wait or hold the lock across it.
+        previous.thenCompose(ignored -> socket.sendText(text, true)).whenComplete((ignored, ex) -> {
+            if (ex != null) error = ex;
+            complete.complete(null);
+        });
     }
 
     @Override

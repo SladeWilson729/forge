@@ -202,6 +202,7 @@ All server messages require `seq: integer >= 0`, increasing per seat. Client gam
 | Type | Fields beyond type and seq | Forge feed or server owner |
 |---|---|---|
 | `hello` | `protocolVersion`: const `1`; `serverVersion`: string; `seat`: integer; `playerId`: `PlayerRef` | RegisteredPlayer binding supplies the Forge player id; hello waits for binding, then precedes cached state/pending prompts; no ProtocolMethod |
+| `joined` | `seq`: const `0`; `seat`: integer; `seatToken`: string (64 lowercase hex characters) | Successful join binds this socket; token authenticates later replacement connections. |
 | `lobby` | `seats?`: array of JSON value (unresolved; see $comment) | New Lobby; no ProtocolMethod |
 | `deckResult` | `ok`, `needsCommander`: boolean; `candidates`, `warnings`, `commander`: string arrays; `errors`: array of `{line: integer, text: string, message: string}`; `count`: integer; `deckName`: string | DeckImport; submitDeck accepts `text` and optional `commander`: array of names |
 | `state` | `turn`: `Int32`; `activePlayerId`: `PlayerRef` or null; `priorityPlayerId`: `PlayerRef` or null; `phase`: `PhaseType` or null; `monarchId`: `PlayerRef` or null; `initiativeId`: `PlayerRef` or null; `players`: array of `Player`; `stack`: array of `StackItem`; `activeInput`: `ActiveInput` | setGameView and applyDelta with objects; display calls update activeInput |
@@ -452,14 +453,21 @@ Source caveats: GameEventPlayerCounters.amount is the **new total**, despite its
 
 **Logs and messages.** GameEventAddLog supplies text, entryType and optional source-card provenance. PayloadFilter redacts hidden-source entries even when a public namesake exists; for entries without provenance it checks hidden names against visible names, excluding libraries. The visibility index is captured on the full snapshot's Forge-safe caller, so event-only packets never scan live cards. The writer retains up to 200 filtered log entries, including covered offline logs; logTail is the preamble described below. Entries retain their delivered sequence (or their original allocated sequence if covered before delivery). message.level remains info/warning/error/rejected; message/showErrorDialog supply info/error and optional titles, flashIncorrectAction supplies rejected with generic text, and ActionRouter supplies its own rejection reason.
 
-**Connection handshake (first connection and replacement, plan 2.2 clarification).** In this exact order:
+**Connection handshake (task 1.12, every first connection and replacement).** In this exact order:
 
-1. `hello`, top-level `seq: 0`, the connection preamble.
-2. `logTail`, top-level `seq: 0`, including only entries with their original `seq <= cachedState.seq`; empty when no cached state exists.
-3. The latest cached state, if any, with its original seq. The single pending state participates in choosing the latest cache.
-4. Queued messages strictly newer than that cached state, in increasing seq order. The covered prefix (seq at or below the cache) is dropped **for this connection**; its logs are represented in logTail. Pending prompts are still replayed with their original requestIds even when their envelope seq is covered, and their queued duplicates are removed.
+1. Server sends `hello`, top-level `seq: 0`. The socket is unbound and receives no seat data yet.
+2. Client sends `join {name: string, protocolVersion: 1, seatToken?: string}`. An unclaimed seat mints a cryptographically random 32-byte hexadecimal token. Tokens remain in memory for the server's lifetime, across games.
+3. Server sends `joined {type: "joined", seq: 0, seat: integer, seatToken: string}`. A claimed seat requires its original token. Wrong/missing tokens receive `message.level: "rejected"`, text "This seat is already taken", then close 4001; the holder is untouched. Wrong protocol versions receive a readable rejection then close 4002. Only a valid join replaces the old socket.
+4. `logTail`, top-level `seq: 0`, includes only entries whose original `seq <= cachedState.seq` (empty if there is no cached state).
+5. Cached latest state, if any, with its original seq. The single pending state participates in choosing the latest cache.
+6. Open prompts replay with their original requestIds, then newer messages in sequence order. The covered prefix (seq at or below the cache) is dropped for this connection; its logs are represented in logTail. Prompt replays are the exception and their queued duplicates are removed. Retained offline log entries newer than the cache replay as normal log messages after the cached state.
+7. Request `ProtocolGuiGame.setResyncPending()`: Forge rebuilds a fresh full state on its next safe send, never on the I/O thread.
 
-Hello/logTail are excluded from increasing-sequence checks; pending prompts are keyed by requestId. Resync uses the same logTail/cache/pending-prompt replay without a new hello. Replacement clears per-seat revealed refs and removes revealed from the cache before replay. These handshake rules supersede retaining the old offline prefix: they do not authorize dropping events during an ongoing connection.
+Hello/joined/logTail are preambles excluded from increasing-sequence checks; pending prompts are keyed by requestId. Resync uses the same logTail/cache/pending-prompt replay without a new hello or joined. Replacement clears per-seat revealed refs and removes revealed from the cache before replay.
+
+While disconnected, each seat keeps only the newest state, its open prompt table, and the latest 200 filtered log entries. Events and obsolete states are dropped; no disconnected event backlog accumulates. During an ongoing connection events/logs/prompts retain FIFO delivery. Disconnect never cancels prompt futures; token-authenticated reconnect can answer the same requestId directly on the Netty thread.
+
+**Serializer failure containment (task 1.12).** A failed snapshot does not escape into Forge. The first failure in a burst logs SEVERE and sends `message {level:"error", text:"Display update failed; resyncing"}`; the next safe send retries after requesting full resync. Success resets the burst counter. Three consecutive failures stop retries for that seat and log the stop; other seats continue. No Forge call runs under the per-seat bookkeeping lock.
 
 A snapshot is built only inside Forge-safe setGameView or object-bearing applyDelta delivery. Snapshot-diff events are computed there; events-only packets do not trigger graph walks. Only detached JSON crosses to SeatWriter. I/O never waits for Forge. Leaf locks never hold Forge calls or prompt waits.
 
@@ -472,9 +480,9 @@ The original task 1.1 questions are retained below, followed by their plan 3.5 d
 
 - **E1.** Will, what server message and correlation fields should carry the String returned by describeAbility/getActivateDescription? Section 3.2 promises a tooltip reply but 3.1 names none.
 
-  Default (plan 3.5): New server message `abilityDescription {cardId, text}` answers `describeAbility`. Finished in task 1.12 area.
+  Decision (task 1.12): `describeAbility {cardId}` resolves only an identity-visible integer card ref and calls `IGameController.getActivateDescription` on the EDT. `abilityDescription {cardId, text}` returns to that seat only. Opaque, hidden and unknown refs are rejected.
 
-  Status: default, finished in task 1.12 area
+  Status: decided (task 1.12)
 
 - **E2.** Will, what field should hold GameLogEntryType when log.type must remain the discriminator "log"? Is logTail a separate message or a field in another message, and what is its entries envelope?
 

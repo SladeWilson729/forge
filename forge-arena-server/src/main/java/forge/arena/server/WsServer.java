@@ -145,10 +145,17 @@ public final class WsServer implements AutoCloseable {
             if (seat < 0) return;
             try {
                 final JsonObject message = JsonParser.parseString(frame.text()).getAsJsonObject();
-                if (message.has("type") && "promptReply".equals(message.get("type").getAsString())) {
+                if (message.has("type") && "join".equals(message.get("type").getAsString())) {
+                    writer(seat).join(ctx.channel(), message);
+                } else if (!writer(seat).isBound(ctx.channel())) {
+                    writer(seat).rejectUnbound(ctx.channel(), message, "Join this seat before sending messages");
+                } else if (message.has("type") && "promptReply".equals(message.get("type").getAsString())) {
                     writer(seat).promptReply(message);
                 } else writer(seat).action(message);
             } catch (RuntimeException ex) {
+                if (!writer(seat).isBound(ctx.channel())) {
+                    writer(seat).rejectUnbound(ctx.channel(), null, "Invalid JSON message"); return;
+                }
                 final JsonObject rejected = new JsonObject();
                 rejected.addProperty("type", "message"); rejected.addProperty("level", "rejected");
                 rejected.addProperty("text", "Invalid JSON message"); writer(seat).sendFromIo(rejected);

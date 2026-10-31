@@ -50,6 +50,22 @@ public final class JsonSeatRemote implements IRemote {
     // Our JSON/bookkeeping only. Never held across a Forge call or a graph walk.
     private final Object stateLock = new Object();
     private boolean buildingSnapshot;
+    private int consecutiveSnapshotFailures;
+    private volatile forge.gamemodes.net.ProtocolGuiGame protocolGui;
+
+    void attachGui(forge.gamemodes.net.ProtocolGuiGame gui) { protocolGui = gui; }
+
+    void requestFullResync() {
+        FThreads.invokeInEdtLater(() -> {
+            var gui = protocolGui;
+            if (gui == null && game != null && seat != null) {
+                var player = game.getPlayer(seat);
+                if (player != null && player.getController() instanceof PlayerControllerHuman human
+                        && human.getGui() instanceof forge.gamemodes.net.ProtocolGuiGame humanGui) gui = humanGui;
+            }
+            if (gui != null) gui.setResyncPending();
+        });
+    }
     // Dirty work is distinct from the failed-snapshot health bit: queued work has an owner.
     private boolean snapshotRequested;
     private final List<List<?>> pendingSnapshotEvents = new ArrayList<>();
@@ -187,7 +203,7 @@ public final class JsonSeatRemote implements IRemote {
         synchronized (stateLock) {
             // A timer can race a full walk. Retain its display in the tracker and let that
             // walk publish it, rather than pairing newly completed ids with the old graph.
-            if (latestState == null || buildingSnapshot) return;
+            if (latestState == null || buildingSnapshot || dirty) return;
             publishInputChange();
         }
     }
@@ -281,7 +297,7 @@ public final class JsonSeatRemote implements IRemote {
 
     private void snapshot(final List<?> events) {
         synchronized (stateLock) {
-            if (dirty) throw new IllegalStateException("Seat snapshot previously aborted");
+            if (consecutiveSnapshotFailures >= 3) return;
             snapshotRequested = true;
             if (events != null && !events.isEmpty()) pendingSnapshotEvents.add(List.copyOf(events));
             if (buildingSnapshot) return;
@@ -304,16 +320,31 @@ public final class JsonSeatRemote implements IRemote {
                 }
                 // The owner stays on its original Forge-safe caller through every rebuild.
                 // No bridge monitor is held during a Forge read, callback, or event encoding.
-                if (rebuild) buildSnapshot();
+                if (rebuild) {
+                    buildSnapshot();
+                    synchronized (stateLock) { consecutiveSnapshotFailures = 0; dirty = false; }
+                }
                 if (eventPump != null) {
                     for (List<?> batch : batches) eventPump.batch(batch, lastStateSequence).forEach(writer::send);
                 }
             }
         } catch (final RuntimeException | Error ex) {
-            synchronized (stateLock) { dirty = true; buildingSnapshot = false; }
-            // An actual serializer failure is fatal to this seat, never a silent wait for a
-            // delta that may not arrive while Forge is parked on human input.
-            throw ex;
+            final int failures;
+            synchronized (stateLock) {
+                dirty = true; buildingSnapshot = false; snapshotRequested = false;
+                pendingSnapshotEvents.clear(); failures = ++consecutiveSnapshotFailures;
+            }
+            if (failures == 1) {
+                LOG.log(System.Logger.Level.ERROR, "Seat display update failed; requesting resync", ex);
+                JsonObject error = new JsonObject(); error.addProperty("type", "message");
+                error.addProperty("level", "error"); error.addProperty("text", "Display update failed; resyncing");
+                try { writer.send(error); }
+                catch (IllegalStateException closed) {
+                    LOG.log(System.Logger.Level.DEBUG, "Seat writer closed during snapshot failure", closed);
+                }
+            }
+            if (failures < 3) requestFullResync();
+            else LOG.log(System.Logger.Level.WARNING, "Seat display update failed three consecutive times; retries stopped");
         }
     }
 

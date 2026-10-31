@@ -285,7 +285,7 @@ public class TranscriptLogTest {
                             HiddenInfoAssertions.noHiddenName(message, "Consecrated Sphinx"); scannedSecret = true;
                         }
                         String type = message.get("type").getAsString();
-                        if (!type.equals("hello") && !type.equals("logTail")) {
+                        if (!type.equals("hello") && !type.equals("joined") && !type.equals("logTail")) {
                             assertTrue(message.get("seq").getAsLong() > previous); previous = message.get("seq").getAsLong();
                         }
                         if (type.equals("state")) for (var p : message.getAsJsonArray("players")) {

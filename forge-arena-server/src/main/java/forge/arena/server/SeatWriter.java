@@ -14,7 +14,7 @@ import java.util.concurrent.locks.LockSupport;
 
 /** One daemon per seat; no Forge objects or mutable JSON cross to this thread. */
 public final class SeatWriter implements AutoCloseable {
-    private static final ClientMessageSchema DECK_MESSAGES = new ClientMessageSchema();
+    private static final ClientMessageSchema CLIENT_MESSAGES = new ClientMessageSchema();
     private static final System.Logger LOG = System.getLogger(SeatWriter.class.getName());
     private record Outbound(long seq, String json, boolean state, long stateSeq) { }
     record GameStart(java.time.ZonedDateTime time, long nanos) { }
@@ -53,8 +53,66 @@ public final class SeatWriter implements AutoCloseable {
     private volatile boolean closed;
     private volatile String lastState;
     private final java.util.concurrent.atomic.AtomicBoolean resyncRequested = new java.util.concurrent.atomic.AtomicBoolean();
-    // Only the writer thread accesses the channel and send timing.
-    private Channel channel;
+    // Only the writer changes the bound channel; I/O reads it to gate seat traffic.
+    private volatile Channel channel;
+    private final java.util.Set<Channel> awaitingJoin = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+    private String seatToken;
+
+    boolean isBound(Channel candidate) { return channel == candidate && candidate.isActive(); }
+
+    int queuedNonStates() { synchronized (queueLock) { return messages.size(); } }
+    int queuedStates() { synchronized (queueLock) { return pendingState == null ? 0 : 1; } }
+
+    void join(Channel candidate, JsonObject message) {
+        final String json = WsServer.GSON.toJson(message);
+        transcriptWork.add(() -> acceptJoin(candidate, JsonParser.parseString(json).getAsJsonObject()));
+        LockSupport.unpark(thread);
+    }
+
+    private void acceptJoin(Channel candidate, JsonObject message) {
+        if (!candidate.isActive() || !awaitingJoin.contains(candidate)) return;
+        if (!message.has("protocolVersion") || !new com.google.gson.JsonPrimitive(1).equals(message.get("protocolVersion"))) {
+            transcriptInput(message, "rejected", System.nanoTime());
+            rejectJoin(candidate, "Protocol version 1 is required", 4002); return;
+        }
+        try { CLIENT_MESSAGES.validate(message); }
+        catch (IllegalArgumentException ex) {
+            transcriptInput(message, "rejected", System.nanoTime());
+            rejectJoin(candidate, "Invalid join message", 4002); return;
+        }
+        if (seatToken != null && (!message.has("seatToken") || !seatToken.equals(message.get("seatToken").getAsString()))) {
+            transcriptInput(message, "rejected", System.nanoTime());
+            rejectJoin(candidate, "This seat is already taken", 4001); return;
+        }
+        if (seatToken == null) {
+            byte[] bytes = new byte[32]; new java.security.SecureRandom().nextBytes(bytes);
+            seatToken = java.util.HexFormat.of().formatHex(bytes);
+        }
+        awaitingJoin.remove(candidate);
+        bindConnection(candidate);
+        JsonObject joined = new JsonObject(); joined.addProperty("type", "joined"); joined.addProperty("seq", 0);
+        joined.addProperty("seat", seat); joined.addProperty("seatToken", seatToken); write(WsServer.GSON.toJson(joined));
+        transcriptInput(message, "accepted", System.nanoTime());
+        replayPending = true;
+    }
+
+    private void rejectJoin(Channel candidate, String reason, int code) {
+        awaitingJoin.remove(candidate);
+        JsonObject message = new JsonObject(); message.addProperty("type", "message"); message.addProperty("seq", 0);
+        message.addProperty("level", "rejected"); message.addProperty("text", reason);
+        writeTo(candidate, WsServer.GSON.toJson(message));
+        candidate.writeAndFlush(new CloseWebSocketFrame(code, reason)).addListener(ChannelFutureListener.CLOSE);
+    }
+
+    void rejectUnbound(Channel candidate, JsonObject input, String reason) {
+        if (input != null) transcriptInput(input, "rejected", System.nanoTime());
+        transcriptWork.add(() -> {
+            JsonObject message = new JsonObject(); message.addProperty("type", "message"); message.addProperty("seq", 0);
+            message.addProperty("level", "rejected"); message.addProperty("text", reason);
+            writeTo(candidate, WsServer.GSON.toJson(message));
+        });
+        LockSupport.unpark(thread);
+    }
     private boolean connectionClosed;
     private long nextStateAt;
     private long lastStateSeq;
@@ -111,9 +169,14 @@ public final class SeatWriter implements AutoCloseable {
 
     void disconnected(Channel disconnected) {
         transcriptWork.add(() -> {
+            awaitingJoin.remove(disconnected);
             if (channel == disconnected && !connectionClosed) {
                 connectionClosed = true;
                 if (transcript != null) transcript.record("conn", "{\"type\":\"closed\"}", null, System.nanoTime());
+                synchronized (queueLock) {
+                    for (Outbound queued : messages) { rememberLog(queued); rememberPrompt(queued.json()); }
+                    messages.clear();
+                }
             }
         });
         LockSupport.unpark(thread);
@@ -144,6 +207,9 @@ public final class SeatWriter implements AutoCloseable {
             final Outbound outbound = new Outbound(seq, WsServer.GSON.toJson(message), state, dependency);
             if (state) {
                 pendingState = outbound;
+            } else if (channel == null || !channel.isActive()) {
+                rememberLog(outbound);
+                rememberPrompt(outbound.json());
             } else {
                 messages.addLast(outbound);
             }
@@ -179,7 +245,7 @@ public final class SeatWriter implements AutoCloseable {
 
     void action(final JsonObject message) {
         if (message.has("type") && "submitDeck".equals(message.get("type").getAsString())) {
-            try { DECK_MESSAGES.validate(message); submitDeck(message); }
+            try { CLIENT_MESSAGES.validate(message); submitDeck(message); }
             catch (IllegalArgumentException ex) {
                 JsonObject rejected = new JsonObject(); rejected.addProperty("type", "message");
                 rejected.addProperty("level", "rejected"); rejected.addProperty("text", ex.getMessage()); sendFromIo(rejected);
@@ -216,11 +282,18 @@ public final class SeatWriter implements AutoCloseable {
         }
         JsonObject tail = new JsonObject(); tail.addProperty("type", "logTail"); tail.addProperty("seq", 0L);
         com.google.gson.JsonArray entries = new com.google.gson.JsonArray();
-        logTail.stream().filter(entry -> entry.get("seq").getAsLong() <= lastStateSeq)
-                .forEach(entry -> entries.add(entry.deepCopy()));
+        synchronized (queueLock) {
+            logTail.stream().filter(entry -> entry.get("seq").getAsLong() <= lastStateSeq)
+                    .forEach(entry -> entries.add(entry.deepCopy()));
+        }
         tail.add("entries", entries); write(WsServer.GSON.toJson(tail));
         if (lastState != null) {
             write(lastState); nextStateAt = System.nanoTime() + STATE_INTERVAL;
+        }
+        java.util.List<JsonObject> newerLogs;
+        synchronized (queueLock) {
+            newerLogs = logTail.stream().filter(entry -> entry.get("seq").getAsLong() > lastStateSeq)
+                    .map(JsonObject::deepCopy).toList();
         }
         JsonSeatRemote receiver = remote;
         if (receiver != null) {
@@ -235,14 +308,18 @@ public final class SeatWriter implements AutoCloseable {
                 write(prompt);
             }
         }
+        for (JsonObject log : newerLogs) { log.addProperty("type", "log"); write(WsServer.GSON.toJson(log)); }
         replayPending = false;
+        if (receiver != null) receiver.requestFullResync();
     }
 
     private void rememberLog(Outbound message) {
-        JsonObject sent = JsonParser.parseString(message.json()).getAsJsonObject();
-        if ("log".equals(sent.get("type").getAsString())) {
-            sent.remove("type"); logTail.addLast(sent);
-            while (logTail.size() > 200) logTail.removeFirst();
+        synchronized (queueLock) {
+            JsonObject sent = JsonParser.parseString(message.json()).getAsJsonObject();
+            if ("log".equals(sent.get("type").getAsString())) {
+                sent.remove("type"); logTail.addLast(sent);
+                while (logTail.size() > 200) logTail.removeFirst();
+            }
         }
     }
 
@@ -273,30 +350,9 @@ public final class SeatWriter implements AutoCloseable {
             // Startup connections remain queued until RegisteredPlayer has a real Forge id.
             // No socket output can precede the bound hello; no I/O thread waits for it.
             while (hello != null && (connected = connections.poll()) != null) {
-                final boolean replacement = channel != null;
-                if (replacement && !connectionClosed && !channel.isActive()) {
-                    connectionClosed = true;
-                    if (transcript != null) transcript.record("conn", "{\"type\":\"closed\"}", null, System.nanoTime());
-                }
-                final boolean liveReplacement = replacement && !connectionClosed;
-                if (channel != null && channel != connected) {
-                    channel.writeAndFlush(new CloseWebSocketFrame(1000, "Replaced by a new connection for this seat"))
-                            .addListener(ChannelFutureListener.CLOSE);
-                }
-                channel = connected;
-                connectionClosed = false;
-                if (transcript != null) transcript.record("conn", liveReplacement
-                        ? "{\"type\":\"replaced\"}" : "{\"type\":\"connected\"}", null, System.nanoTime());
-                if (replacement) {
-                    if (remote != null) remote.clearReveals();
-                    // Cached replay must not briefly reopen the previous connection's reveal.
-                    if (lastState != null) {
-                        JsonObject cached = JsonParser.parseString(lastState).getAsJsonObject();
-                        cached.remove("revealed"); lastState = WsServer.GSON.toJson(cached);
-                    }
-                }
-                write(hello);
-                replayPending = true;
+                if (!connected.isActive()) continue;
+                awaitingJoin.add(connected);
+                writeTo(connected, hello);
             }
             if (replayPending && channel != null && channel.isActive()) {
                 if (lastState != null && System.nanoTime() < nextStateAt) {
@@ -355,10 +411,37 @@ public final class SeatWriter implements AutoCloseable {
         }
     }
 
-    private void write(final String json) {
-        if (channel != null && channel.isActive()) {
+    private void bindConnection(Channel connected) {
+        final boolean replacement = channel != null;
+        if (replacement && !connectionClosed && !channel.isActive()) {
+            connectionClosed = true;
+            if (transcript != null) transcript.record("conn", "{\"type\":\"closed\"}", null, System.nanoTime());
+        }
+        final boolean liveReplacement = replacement && !connectionClosed;
+        if (channel != null && channel != connected) {
+            channel.writeAndFlush(new CloseWebSocketFrame(1000, "Replaced by a new connection for this seat"))
+                    .addListener(ChannelFutureListener.CLOSE);
+        }
+        channel = connected;
+        connectionClosed = false;
+        if (transcript != null) transcript.record("conn", liveReplacement
+                ? "{\"type\":\"replaced\"}" : "{\"type\":\"connected\"}", null, System.nanoTime());
+        if (replacement) {
+            if (remote != null) remote.clearReveals();
+            // Cached replay must not briefly reopen the previous connection's reveal.
+            if (lastState != null) {
+                JsonObject cached = JsonParser.parseString(lastState).getAsJsonObject();
+                cached.remove("revealed"); lastState = WsServer.GSON.toJson(cached);
+            }
+        }
+    }
+
+    private void write(final String json) { writeTo(channel, json); }
+
+    private void writeTo(Channel target, final String json) {
+        if (target != null && target.isActive()) {
             rememberPrompt(json);
-            channel.writeAndFlush(new TextWebSocketFrame(json));
+            target.writeAndFlush(new TextWebSocketFrame(json));
             if (transcript != null) transcript.record("out", json, null, System.nanoTime());
             if (transcript != null && "gameOver".equals(JsonParser.parseString(json).getAsJsonObject().has("kind")
                     ? JsonParser.parseString(json).getAsJsonObject().get("kind").getAsString() : "")) transcript.flush();

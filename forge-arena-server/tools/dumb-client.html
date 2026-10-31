@@ -95,6 +95,8 @@ Will performs the full Commander game check manually. Copy the wire log if play 
   const endpoint = `ws://localhost:36800/ws?seat=${seat}`;
   $('endpoint').textContent = endpoint;
   let socket, welcomed = false, state = null, baseSeq = -1, clientSeq = 0;
+  let reconnectDelay = 1000;
+  const tokenKey = `forgeArena.seatToken.${endpoint}`;
   let ownPlayerId = null, cards = new Map(), players = new Map(), stackItems = new Map();
   let lastReply = null, titleTimer = null;
   const pending = new Map(), notices = [], logLines = [], dropdowns = new Map();
@@ -510,12 +512,25 @@ Will performs the full Commander game check manually. Copy the wire log if play 
       }
       case 'hello':
         ownPlayerId = Number.isInteger(message.playerId) ? message.playerId : null;
-        welcomed = message.protocolVersion === 1 && message.seat === seat && ownPlayerId !== null;
+        const compatible = message.protocolVersion === 1 && message.seat === seat && ownPlayerId !== null;
+        welcomed = false;
         dropdowns.clear();
         baseSeq = -1; state = null; cards.clear(); players.clear(); stackItems.clear(); pending.clear(); lastReply = null;
         $('promptDialog').close();
-        $('status').textContent = welcomed ? `Connected · seat ${seat} · ${message.serverVersion}` : 'Incompatible protocol or seat. Actions disabled.';
-        if (!welcomed) notice('Expected protocolVersion 1, the requested seat and a playerId.', 'error'); render(); break;
+        $('status').textContent = compatible ? `Joining seat ${seat}…` : 'Incompatible protocol or seat. Actions disabled.';
+        if (!compatible) notice('Expected protocolVersion 1, the requested seat and a playerId.', 'error');
+        else {
+          const join = {type:'join', name:`Browser seat ${seat}`, protocolVersion:1};
+          try { const token = localStorage.getItem(tokenKey); if (token) join.seatToken = token; }
+          catch (error) { notice('Seat token storage unavailable: ' + error.message, 'warning'); }
+          socket.send(JSON.stringify(join)); log('OUT', {...join, seatToken:join.seatToken ? '[stored token]' : undefined});
+        }
+        render(); break;
+      case 'joined':
+        welcomed = message.seat === seat; reconnectDelay = 1000;
+        try { localStorage.setItem(tokenKey, message.seatToken); }
+        catch (error) { notice('Could not save reconnect token: ' + error.message, 'warning'); }
+        $('status').textContent = `Connected · seat ${seat}`; render(); break;
       case 'state':
         if (!welcomed || !Number.isSafeInteger(message.seq) || message.seq <= baseSeq) break;
         baseSeq = message.seq; state = message; render(); break;
@@ -559,8 +574,9 @@ Will performs the full Commander game check manually. Copy the wire log if play 
     };
     socket.onerror = () => { $('status').textContent = 'Connection error; check the server.'; };
     socket.onclose = event => {
-      welcomed = false; $('status').textContent = `Disconnected (${event.code}) ${event.reason}. Reconnecting in 2 s…`;
-      render(); setTimeout(connect, 2000);
+      const delay = reconnectDelay; reconnectDelay = Math.min(8000, reconnectDelay * 2);
+      welcomed = false; $('status').textContent = `${event.code === 4001 ? 'Seat taken. ' : ''}Disconnected (${event.code}) ${event.reason}. Reconnecting in ${delay / 1000} s…`;
+      render(); setTimeout(connect, delay);
     };
   }
   $('promptDialog').addEventListener('cancel', event => event.preventDefault()); // Escape must not silently abandon a blocking prompt.

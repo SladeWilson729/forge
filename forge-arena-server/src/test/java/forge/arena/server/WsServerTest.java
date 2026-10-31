@@ -27,14 +27,14 @@ public class WsServerTest {
             JsonObject newerEvent = oldEvent.deepCopy(); newerEvent.addProperty("stateSeq", cached.get("seq").getAsLong());
             server.writer(0).send(newerEvent);
             client.connect(HttpClient.newHttpClient(), server.getPort(), "/ws?seat=0"); client.hello(0);
-            JsonObject tail = client.history().get(1).object();
+            JsonObject tail = client.history().get(2).object();
             assertEquals(tail.getAsJsonArray("entries").size(), 1);
             assertEquals(tail.getAsJsonArray("entries").get(0).getAsJsonObject().get("seq"), oldLog.get("seq"));
             assertEquals(client.receive(), cached, "Cached state is third, with its original seq");
             assertEquals(client.receive(), newerLog);
-            assertEquals(client.receive(), newerEvent);
+            // Offline events are dropped; newer offline logs replay from the bounded log tail.
             long previous = cached.get("seq").getAsLong();
-            for (var received : client.history().subList(3, client.history().size())) {
+            for (var received : client.history().subList(4, client.history().size())) {
                 long seq = received.object().get("seq").getAsLong();
                 assertTrue(seq > previous, "No covered offline event/log after cached state"); previous = seq;
             }
@@ -87,7 +87,7 @@ public class WsServerTest {
             final JsonObject next = state("Updated seat zero");
             server.writer(0).send(next);
             assertEquals(second.receive(), next);
-            assertEquals(otherSeat.history().size(), 3, "Hello, logTail, and only seat two's state");
+            assertEquals(otherSeat.history().size(), 4, "Hello, joined, logTail, and only seat two's state");
         } finally {
             server.close();
             executor.shutdownNow();

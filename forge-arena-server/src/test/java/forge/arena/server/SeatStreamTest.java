@@ -144,12 +144,13 @@ public class SeatStreamTest {
             }
             finished.countDown();
         });
-        try (WsTestClient zero = new WsTestClient(); WsTestClient two = new WsTestClient();
+        try (WsTestClient zero = new WsTestClient(); WsTestClient two = new WsTestClient(); WsTestClient offline = new WsTestClient();
              WsTestClient reconnect = new WsTestClient()) {
             server.start();
             final HttpClient http = HttpClient.newBuilder().executor(executor).connectTimeout(Duration.ofSeconds(5)).build();
             zero.connect(http, server.getPort(), "/ws?seat=0");
             two.connect(http, server.getPort(), "/ws?seat=2");
+            offline.connect(http, server.getPort(), "/ws?seat=1");
             final List<RegisteredPlayer> players = new ArrayList<>();
             for (int seat = 0; seat < 4; seat++) {
                 players.add(RegisteredPlayer.forCommander(deck("Stream " + seat))
@@ -160,8 +161,11 @@ public class SeatStreamTest {
             final int ownerZero = game.getPlayers().get(0).getId();
             assertEquals(zero.hello(0).get("playerId").getAsInt(), ownerZero);
             assertEquals(two.hello(2).get("playerId").getAsInt(), game.getPlayers().get(2).getId());
+            offline.hello(1); offline.close(); // The remaining bot game must not accumulate an event backlog.
             assertTrue(finished.await(120, TimeUnit.SECONDS), "Four AIs finished within 120 seconds");
             assertTrue(game.isGameOver());
+            assertEquals(server.writer(1).queuedNonStates(), 0, "Disconnected bot-seat events are dropped");
+            assertTrue(server.writer(1).queuedStates() <= 1, "Only the latest disconnected state survives");
             assertEquals(game.getRules().getGamesPerMatch(), 1);
             // Wait for the final coalesced state on both clients, with bounded socket waits.
             awaitState(zero, remotes[0].getLastStateSequence());
@@ -210,8 +214,9 @@ public class SeatStreamTest {
         assertNull(client.error);
         long previous = -1;
         assertEquals(client.history().get(0).object().get("type").getAsString(), "hello");
-        assertEquals(client.history().get(1).object().get("type").getAsString(), "logTail");
-        final JsonObject tail = client.history().get(1).object();
+        assertEquals(client.history().get(1).object().get("type").getAsString(), "joined");
+        assertEquals(client.history().get(2).object().get("type").getAsString(), "logTail");
+        final JsonObject tail = client.history().get(2).object();
         final JsonObject firstState = client.history().stream().map(WsTestClient.Received::object)
                 .filter(m -> "state".equals(m.get("type").getAsString())).findFirst().orElseThrow();
         for (var entry : tail.getAsJsonArray("entries")) {
@@ -220,7 +225,7 @@ public class SeatStreamTest {
         final List<Long> times = new ArrayList<>();
         for (final WsTestClient.Received received : client.history()) {
             final JsonObject message = received.object();
-            if ("hello".equals(message.get("type").getAsString()) || "logTail".equals(message.get("type").getAsString())) {
+            if ("hello".equals(message.get("type").getAsString()) || "joined".equals(message.get("type").getAsString()) || "logTail".equals(message.get("type").getAsString())) {
                 assertEquals(message.get("seq").getAsLong(), 0L);
                 continue;
             }

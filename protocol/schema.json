@@ -3142,7 +3142,7 @@
         "protocolVersion"
       ],
       "additionalProperties": true,
-      "$comment": "Plan 3.5 E13: join carries the client protocolVersion; clientSeq/baseSeq are required only on game actions. Finished in task 1.4. Seat-token issuance remains E11 (tasks 1.11, 1.12)."
+      "$comment": "Plan 3.5 E13: protocolVersion is checked before seat-token authentication (task 1.12). Only game actions require clientSeq/baseSeq; optional correlation fields remain supported on join."
     },
     "submitDeck": {
       "type": "object",
@@ -3892,6 +3892,9 @@
         },
         {
           "$ref": "#/$defs/abilityDescription"
+        },
+        {
+          "$ref": "#/$defs/joined"
         }
       ]
     },
@@ -4208,6 +4211,32 @@
         "label"
       ],
       "type": "object"
+    },
+    "joined": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "joined"
+        },
+        "seq": {
+          "const": 0
+        },
+        "seat": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "seatToken": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "seq",
+        "seat",
+        "seatToken"
+      ],
+      "additionalProperties": false
     }
   }
 }

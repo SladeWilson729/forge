@@ -10,6 +10,7 @@ import forge.gui.control.WatchLocalGame;
 public class SeatProtocolGui extends ProtocolGuiGame {
     public SeatProtocolGui(final IRemote remote) {
         super(remote);
+        if (remote instanceof JsonSeatRemote seatRemote) seatRemote.attachGui(this);
     }
 
     /** Attach before gameplay starts. Never register these watchers with HostedMatch. */
