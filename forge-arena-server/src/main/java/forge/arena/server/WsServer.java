@@ -45,8 +45,9 @@ public final class WsServer implements AutoCloseable {
     public WsServer(final String host, final int port) {
         this.host = host;
         this.port = port;
+        final java.util.concurrent.ConcurrentMap<Integer, SeatWriter.GameStart> gameStarts = new java.util.concurrent.ConcurrentHashMap<>();
         for (int seat = 0; seat < writers.length; seat++) {
-            writers[seat] = new SeatWriter(seat);
+            writers[seat] = new SeatWriter(seat, gameStarts);
         }
     }
 
@@ -152,6 +153,12 @@ public final class WsServer implements AutoCloseable {
                 rejected.addProperty("type", "message"); rejected.addProperty("level", "rejected");
                 rejected.addProperty("text", "Invalid JSON message"); writer(seat).sendFromIo(rejected);
             }
+        }
+
+        @Override
+        public void channelInactive(final ChannelHandlerContext ctx) throws Exception {
+            if (seat >= 0) writer(seat).disconnected(ctx.channel());
+            super.channelInactive(ctx);
         }
 
         @Override

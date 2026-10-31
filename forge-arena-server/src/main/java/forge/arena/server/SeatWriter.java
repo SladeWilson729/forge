@@ -16,6 +16,7 @@ import java.util.concurrent.locks.LockSupport;
 public final class SeatWriter implements AutoCloseable {
     private static final System.Logger LOG = System.getLogger(SeatWriter.class.getName());
     private record Outbound(long seq, String json, boolean state, long stateSeq) { }
+    record GameStart(java.time.ZonedDateTime time, long nanos) { }
 
     // Slight headroom below 10/s also avoids a local client's timer jitter counting 11 arrivals.
     private static final long STATE_INTERVAL = TimeUnit.MILLISECONDS.toNanos(125);
@@ -23,9 +24,13 @@ public final class SeatWriter implements AutoCloseable {
     private final ArrayDeque<Outbound> messages = new ArrayDeque<>();
     private final ConcurrentLinkedQueue<Channel> connections = new ConcurrentLinkedQueue<>();
     private final ConcurrentLinkedQueue<String> ioMessages = new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<Runnable> transcriptWork = new ConcurrentLinkedQueue<>();
+    private TranscriptLog transcript;
+    private int transcriptGame = -1;
     private volatile JsonSeatRemote remote;
     private final Thread thread;
     private final int seat;
+    private final java.util.concurrent.ConcurrentMap<Integer, GameStart> gameStarts;
     private volatile String hello;
     private Outbound pendingState;
     private long sequence;
@@ -34,13 +39,19 @@ public final class SeatWriter implements AutoCloseable {
     private final java.util.concurrent.atomic.AtomicBoolean resyncRequested = new java.util.concurrent.atomic.AtomicBoolean();
     // Only the writer thread accesses the channel and send timing.
     private Channel channel;
+    private boolean connectionClosed;
     private long nextStateAt;
     private long lastStateSeq;
     private boolean replayPending;
     private final ArrayDeque<JsonObject> logTail = new ArrayDeque<>();
 
     public SeatWriter(final int seat) {
+        this(seat, new java.util.concurrent.ConcurrentHashMap<>());
+    }
+
+    SeatWriter(final int seat, final java.util.concurrent.ConcurrentMap<Integer, GameStart> gameStarts) {
         this.seat = seat;
+        this.gameStarts = gameStarts;
         thread = new Thread(this::run, "Arena-seat-writer-" + seat);
         thread.setDaemon(true);
         thread.start();
@@ -57,6 +68,43 @@ public final class SeatWriter implements AutoCloseable {
         greeting.addProperty("seat", seat);
         greeting.addProperty("playerId", playerId);
         hello = WsServer.GSON.toJson(greeting);
+        LockSupport.unpark(thread);
+    }
+
+    void bindPlayer(final int playerId, final int gameId) {
+        final GameStart start = gameStarts.computeIfAbsent(gameId,
+                ignored -> new GameStart(java.time.ZonedDateTime.now(), System.nanoTime()));
+        synchronized (queueLock) {
+            transcriptWork.add(() -> {
+                if (transcriptGame != gameId) {
+                    if (transcript != null) transcript.close();
+                    transcriptGame = gameId;
+                    transcript = new TranscriptLog(seat, playerId, start.time(), start.nanos());
+                }
+                bindPlayer(playerId);
+            });
+        }
+        LockSupport.unpark(thread);
+    }
+
+    void transcriptInput(JsonObject message, String result, long when) {
+        final String json = WsServer.GSON.toJson(message);
+        transcriptWork.add(() -> { if (transcript != null) transcript.record("in", json, result, when); });
+        LockSupport.unpark(thread);
+    }
+
+    void disconnected(Channel disconnected) {
+        transcriptWork.add(() -> {
+            if (channel == disconnected && !connectionClosed) {
+                connectionClosed = true;
+                if (transcript != null) transcript.record("conn", "{\"type\":\"closed\"}", null, System.nanoTime());
+            }
+        });
+        LockSupport.unpark(thread);
+    }
+
+    void flushTranscript() {
+        transcriptWork.add(() -> { if (transcript != null) transcript.flush(); });
         LockSupport.unpark(thread);
     }
 
@@ -108,15 +156,19 @@ public final class SeatWriter implements AutoCloseable {
 
     void promptReply(final JsonObject reply) {
         final JsonSeatRemote receiver = remote;
-        if (receiver != null) receiver.promptReply(reply);
+        long when = System.nanoTime();
+        String result = receiver != null ? receiver.promptReply(reply) : null;
+        transcriptInput(reply, result, when);
     }
 
     void action(final JsonObject message) {
         final JsonSeatRemote receiver = remote;
-        if (receiver != null) receiver.action(message);
+        final long when = System.nanoTime();
+        if (receiver != null) receiver.action(message, result -> transcriptInput(message, result, when));
         else {
             JsonObject rejected = new JsonObject(); rejected.addProperty("type", "message");
             rejected.addProperty("level", "rejected"); rejected.addProperty("text", "The seat is not ready"); sendFromIo(rejected);
+            transcriptInput(message, "rejected", when);
         }
     }
 
@@ -186,6 +238,9 @@ public final class SeatWriter implements AutoCloseable {
 
     private void run() {
         while (!closed) {
+            Runnable work;
+            while ((work = transcriptWork.poll()) != null) work.run();
+            if (transcript != null) transcript.flushIfDue();
             if (resyncRequested.getAndSet(false)) replayPending = true;
             String ioMessage;
             while ((ioMessage = ioMessages.poll()) != null) send(JsonParser.parseString(ioMessage).getAsJsonObject());
@@ -194,11 +249,19 @@ public final class SeatWriter implements AutoCloseable {
             // No socket output can precede the bound hello; no I/O thread waits for it.
             while (hello != null && (connected = connections.poll()) != null) {
                 final boolean replacement = channel != null;
+                if (replacement && !connectionClosed && !channel.isActive()) {
+                    connectionClosed = true;
+                    if (transcript != null) transcript.record("conn", "{\"type\":\"closed\"}", null, System.nanoTime());
+                }
+                final boolean liveReplacement = replacement && !connectionClosed;
                 if (channel != null && channel != connected) {
                     channel.writeAndFlush(new CloseWebSocketFrame(1000, "Replaced by a new connection for this seat"))
                             .addListener(ChannelFutureListener.CLOSE);
                 }
                 channel = connected;
+                connectionClosed = false;
+                if (transcript != null) transcript.record("conn", liveReplacement
+                        ? "{\"type\":\"replaced\"}" : "{\"type\":\"connected\"}", null, System.nanoTime());
                 if (replacement) {
                     if (remote != null) remote.clearReveals();
                     // Cached replay must not briefly reopen the previous connection's reveal.
@@ -226,7 +289,10 @@ public final class SeatWriter implements AutoCloseable {
                 final Outbound candidate = pendingState != null && (first == null || pendingState.seq() < first.seq()
                         || first.stateSeq() > lastStateSeq)
                         ? pendingState : first;
-                if (candidate == null || !connectedNow) {
+                if (!transcriptWork.isEmpty()) {
+                    delay = 1;
+                    next = null;
+                } else if (candidate == null || !connectedNow) {
                     next = null;
                 } else if (candidate.state() && System.nanoTime() < nextStateAt) {
                     delay = nextStateAt - System.nanoTime();
@@ -254,12 +320,23 @@ public final class SeatWriter implements AutoCloseable {
                 write(next.json());
             }
         }
+        Runnable work;
+        while ((work = transcriptWork.poll()) != null) work.run();
+        if (transcript != null) {
+            if (channel != null && !connectionClosed) {
+                transcript.record("conn", "{\"type\":\"closed\"}", null, System.nanoTime());
+            }
+            transcript.close();
+        }
     }
 
     private void write(final String json) {
         if (channel != null && channel.isActive()) {
             rememberPrompt(json);
             channel.writeAndFlush(new TextWebSocketFrame(json));
+            if (transcript != null) transcript.record("out", json, null, System.nanoTime());
+            if (transcript != null && "gameOver".equals(JsonParser.parseString(json).getAsJsonObject().has("kind")
+                    ? JsonParser.parseString(json).getAsJsonObject().get("kind").getAsString() : "")) transcript.flush();
         }
     }
 

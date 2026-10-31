@@ -90,7 +90,7 @@ public final class JsonSeatRemote implements IRemote {
         this.writer = writer;
         this.match = null;
         this.registeredPlayer = null;
-        if (seat != null) writer.bindPlayer(seat.getId());
+        if (seat != null) writer.bindPlayer(seat.getId(), game.getId());
         actionRouter = new ActionRouter(this, false, writer);
         writer.attachRemote(this);
     }
@@ -229,7 +229,7 @@ public final class JsonSeatRemote implements IRemote {
         inputOffers.put(card.getId(), PromptCodec.offeredCard(card, new PromptCodec.Context(game, seat, ids), ref));
     }
 
-    void action(com.google.gson.JsonObject message) { actionRouter.accept(message); }
+    void action(com.google.gson.JsonObject message, java.util.function.Consumer<String> result) { actionRouter.accept(message, result); }
     long completedActionCount() { return actionRouter.completedCount(); }
     Game actionGame() { return game; } // EDT only
     PlayerView actionSeat() { return seat; } // EDT only
@@ -323,7 +323,7 @@ public final class JsonSeatRemote implements IRemote {
             // HostedMatch sorts humans first; wire seat numbers are never game-list indexes.
             seat = ArenaServerMain.playerFor(running, registeredPlayer).getView();
             game = running;
-            writer.bindPlayer(seat.getId());
+            writer.bindPlayer(seat.getId(), game.getId());
             eventPump = null;
         }
         // Inline, on Forge's safe caller (plan 2.2 rule 1). Serializer owns the shared
@@ -332,6 +332,7 @@ public final class JsonSeatRemote implements IRemote {
         snapshotBuiltObserver.accept(state);
         if (eventPump == null) eventPump = new EventPump(seat, ids);
         final boolean gameOver = game.isGameOver();
+        if (gameOver) writer.flushTranscript();
         synchronized (stateLock) {
             if (gameOver) { revealed = new com.google.gson.JsonArray(); revealGeneration++; ids.clearReveals(); }
             if (!revealed.isEmpty()) state.add("revealed", revealed.deepCopy());
@@ -415,23 +416,25 @@ public final class JsonSeatRemote implements IRemote {
     }
 
     /** I/O path: lock-free lookup, pure decoding, future completion. Never dispatch to the EDT. */
-    void promptReply(final JsonObject reply) {
+    String promptReply(final JsonObject reply) {
         try {
             final int id = PromptCodec.integer(reply.get("requestId"));
             final PendingPrompt request = pending.get(id);
             if (request == null || request.answer.isDone()) {
                 LOG.log(System.Logger.Level.INFO, "[prompt] Ignoring unknown/finished requestId {0}", id);
-                return;
+                return null;
             }
             final Object answer = promptCodec.decode(request.prompt, reply);
             final String thread = Thread.currentThread().getName();
             lastReplyThread = thread;
             if (request.answer.complete(answer)) LOG.log(System.Logger.Level.INFO, "[prompt] Completed {0} on {1}", id, thread);
+            return "accepted";
         } catch (IllegalArgumentException | IllegalStateException ex) {
             final JsonObject message = new JsonObject();
             message.addProperty("type", "message"); message.addProperty("level", "rejected");
             message.addProperty("text", ex.getMessage());
             writer.sendFromIo(message);
+            return "rejected";
         }
     }
 

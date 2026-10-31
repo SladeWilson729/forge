@@ -36,15 +36,15 @@ final class ActionRouter {
         this.remote = remote; this.humanSeat = humanSeat; this.writer = writer;
     }
 
-    void accept(JsonObject message) {
+    void accept(JsonObject message, java.util.function.Consumer<String> result) {
         try {
             SCHEMA.validate(message);
             String type = message.get("type").getAsString();
             LOG.log(System.Logger.Level.INFO, "[action] {0} clientSeq={1} baseSeq={2}", type,
                     message.get("clientSeq"), message.get("baseSeq"));
-            if (type.equals("ping")) { JsonObject pong = new JsonObject(); pong.addProperty("type", "pong"); writer.sendFromIo(pong); return; }
-            if (LATER.contains(type)) { LOG.log(System.Logger.Level.INFO, "[action] Deferred: {0}", type); return; }
-            if (type.equals("promptReply")) { remote.promptReply(message); return; }
+            if (type.equals("ping")) { JsonObject pong = new JsonObject(); pong.addProperty("type", "pong"); writer.sendFromIo(pong); result.accept("accepted"); return; }
+            if (LATER.contains(type)) { LOG.log(System.Logger.Level.INFO, "[action] Deferred: {0}", type); result.accept(null); return; }
+            if (type.equals("promptReply")) { result.accept(remote.promptReply(message)); return; }
             if (type.equals("resync")) {
                 writer.resync();
                 FThreads.invokeInEdtLater(() -> {
@@ -52,6 +52,7 @@ final class ActionRouter {
                     if (game != null && remote.actionSeat() != null && game.getPlayer(remote.actionSeat()).getController() instanceof PlayerControllerHuman h
                             && h.getGui() instanceof ProtocolGuiGame gui) gui.setResyncPending();
                 });
+                result.accept("accepted");
                 return;
             }
             require(humanSeat, "This seat is not yours to play");
@@ -76,11 +77,11 @@ final class ActionRouter {
             if (message.has("abilityId")) require(remote.offeredAbility(message.get("abilityId").getAsInt()) != null, "Unknown or stale ability reference");
             JsonObject action = message.deepCopy();
             FThreads.invokeInEdtLater(() -> {
-                try { apply(action, input.get("kind").getAsString(), refs, others); }
-                catch (IllegalArgumentException | IllegalStateException ex) { reject(action, ex.getMessage()); }
+                try { apply(action, input.get("kind").getAsString(), refs, others); result.accept("accepted"); }
+                catch (IllegalArgumentException | IllegalStateException ex) { reject(action, ex.getMessage()); result.accept("rejected"); }
                 finally { completed.incrementAndGet(); }
             });
-        } catch (IllegalArgumentException | IllegalStateException ex) { reject(message, ex.getMessage()); }
+        } catch (IllegalArgumentException | IllegalStateException ex) { reject(message, ex.getMessage()); result.accept("rejected"); }
     }
 
     Ref resolve(JsonElement value, JsonObject state, JsonObject input) {

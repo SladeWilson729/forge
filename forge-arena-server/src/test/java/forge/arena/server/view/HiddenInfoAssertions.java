@@ -9,8 +9,12 @@ import java.util.List;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotNull;
 
-final class HiddenInfoAssertions {
+public final class HiddenInfoAssertions {
     private HiddenInfoAssertions() { }
+
+    public static void noHiddenName(final JsonObject payload, final String name) {
+        assertFalse(ScenarioGame.JSON.toJson(payload).contains(name), "Hidden identity leaked: " + name + " in " + payload);
+    }
 
     static void noIdentity(final JsonObject payload, final Card card) {
         final String json = ScenarioGame.JSON.toJson(payload);

@@ -463,6 +463,8 @@ Hello/logTail are excluded from increasing-sequence checks; pending prompts are 
 
 A snapshot is built only inside Forge-safe setGameView or object-bearing applyDelta delivery. Snapshot-diff events are computed there; events-only packets do not trigger graph walks. Only detached JSON crosses to SeatWriter. I/O never waits for Forge. Leaf locks never hold Forge calls or prompt waits.
 
+**Transcript JSONL (task 1.9).** Each seat and game has a UTF-8 JSONL file named `YYYY-MM-DD_ForgeArena_Transcript_HHmmss_seatN.jsonl` in `arena.transcriptDir` (default `transcripts/`). If that name exists, `_2`, `_3`, and so on are appended before `.jsonl` until an unused name is created. The first line is `transcriptHeader`, with `protocolVersion`, `serverVersion`, `seat`, `playerId`, and ISO-8601 `startedAt`. Subsequent lines have `t` (milliseconds since game start), `dir` (`out`, `in`, or `conn`) and `msg` (the JSON message or connection marker). An inbound line also has `result` when known (`accepted` or `rejected`). Output records contain only messages actually handed to the socket, including handshake messages and prompt replays; coalesced-away or offline messages are not recorded as output. Connection marker types are `connected`, `replaced`, and `closed`.
+
 
 ## E. Gaps and questions for Will
 
