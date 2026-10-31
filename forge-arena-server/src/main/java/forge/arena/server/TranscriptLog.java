@@ -1,7 +1,6 @@
 package forge.arena.server;
 
 import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 
 import java.io.BufferedWriter;
 import java.io.IOException;
@@ -55,12 +54,12 @@ final class TranscriptLog implements AutoCloseable {
     void record(String direction, String json, String result, long when) {
         if (output == null) return;
         try {
-            JsonObject line = new JsonObject();
-            line.addProperty("t", Math.max(0, TimeUnit.NANOSECONDS.toMillis(when - startNanos)));
-            line.addProperty("dir", direction);
-            line.add("msg", JsonParser.parseString(json));
-            if (result != null) line.addProperty("result", result);
-            output.write(WsServer.GSON.toJson(line));
+            // json is already serialized by SeatWriter. Embed it verbatim: parsing and
+            // serializing every outgoing state again wastes work and obscures wire fidelity.
+            output.write("{\"t\":" + Math.max(0, TimeUnit.NANOSECONDS.toMillis(when - startNanos))
+                    + ",\"dir\":" + WsServer.GSON.toJson(direction) + ",\"msg\":" + json);
+            if (result != null) output.write(",\"result\":" + WsServer.GSON.toJson(result));
+            output.write('}');
             output.newLine();
         } catch (IOException ex) { disable(ex); }
     }

@@ -565,10 +565,15 @@ public final class JsonSeatRemote implements IRemote {
 
     /** Writer-thread reconnect replay. Envelopes retain their seq and requestId, like cached state. */
     List<String> pendingPromptMessages() {
+        return pendingPromptWires().stream().map(PromptWire::json).toList();
+    }
+
+    record PromptWire(int requestId, String json) { }
+    List<PromptWire> pendingPromptWires() {
         if (abandonedReason != null) return List.of();
         return pending.values().stream().filter(request -> !request.answer.isDone() && request.wire.get() != null)
                 .sorted(java.util.Comparator.comparingInt(request -> request.prompt.requestId()))
-                .map(request -> request.wire.get()).toList();
+                .map(request -> new PromptWire(request.prompt.requestId(), request.wire.get())).toList();
     }
 
     /** Writer-owned delivery callback; detached JSON/bookkeeping only, no Forge or waiting. */

@@ -15,7 +15,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /** Public override points only; no reflection or changes to Forge's scan/input behavior. */
-final class HighlightProbe {
+public final class HighlightProbe {
     private final Map<String, List<Long>> totals = new ConcurrentHashMap<>();
     private volatile Map<String, List<Long>> pass = new ConcurrentHashMap<>();
     private int passNumber;
@@ -41,6 +41,17 @@ final class HighlightProbe {
     }
 
     void reportTotals() { report("TOTAL passes=" + passNumber, totals); }
+
+    /** The uncached full AvailableActions scan plus weighted protocol push used per priority pass.
+     * An isolated load board has no running Input loop or cached priority scan.
+     */
+    public long priorityScanAndPush(PlayerControllerHuman controller) {
+        long start = System.nanoTime();
+        controller.pushActionableCards(false);
+        long elapsed = System.nanoTime() - start;
+        record("priority-scan-and-push", elapsed);
+        return elapsed;
+    }
 
     PlayerControllerHuman controller(Game game, Player player, LobbyPlayer lobby) {
         return new PlayerControllerHuman(game, player, lobby) {

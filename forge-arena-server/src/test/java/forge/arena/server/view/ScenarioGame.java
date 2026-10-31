@@ -107,8 +107,9 @@ final class ScenarioGame {
         // Distinct test print metadata makes whole-JSON leak scans meaningful: a shared real
         // edition or collector number such as "1" could appear on an unrelated visible card.
         final int number = ++printing;
-        final IPaperCard paper = marked ? new PaperCard(base.getRules(), "PROBESET-" + number,
-                base.getRarity(), IPaperCard.DEFAULT_ART_INDEX, false, "probe-collector-" + number,
+        // End delimiter prevents marker 1 from matching marker 10 on larger boards.
+        final IPaperCard paper = marked ? new PaperCard(base.getRules(), "PROBESET-" + number + "-END",
+                base.getRarity(), IPaperCard.DEFAULT_ART_INDEX, false, "probe-collector-" + number + "-end",
                 IPaperCard.NO_ARTIST_NAME, IPaperCard.NO_FUNCTIONAL_VARIANT) : base;
         final Card card = Card.fromPaperCard(paper, player(seat));
         card.setGameTimestamp(game.getNextTimestamp());
