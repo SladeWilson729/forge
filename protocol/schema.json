@@ -1293,21 +1293,72 @@
         "ok": {
           "type": "boolean"
         },
-        "errors": {
+        "needsCommander": {
+          "type": "boolean"
+        },
+        "candidates": {
           "type": "array",
           "items": {
             "type": "string"
           }
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "line": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "text": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "line",
+              "text",
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "commander": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "deckName": {
+          "type": "string"
         }
       },
       "required": [
         "type",
         "seq",
         "ok",
-        "errors"
+        "needsCommander",
+        "candidates",
+        "errors",
+        "warnings",
+        "commander",
+        "count",
+        "deckName"
       ],
-      "additionalProperties": true,
-      "$comment": "E11: parsed commander and count are required concepts but their field names/shape are unspecified; no fabricated DTO."
+      "additionalProperties": false
     },
     "state": {
       "type": "object",
@@ -3107,6 +3158,13 @@
         },
         "text": {
           "type": "string"
+        },
+        "commander": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
         }
       },
       "required": [

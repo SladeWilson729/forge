@@ -4,10 +4,9 @@ Forge Arena fallback client (no build step or dependencies).
 Start .run/ArenaServerHuman0.run.xml in IntelliJ: ArenaServer (human 0).
 It starts seat 0 human, three bots, and holds the server open after the game.
 Open this file directly in a browser; append ?seat=0 (or another wire seat).
-Choose Human 0 in the page's Your player selector for this run configuration.
-Schema limits: no wire-seat/player-id mapping or card types are supplied. The selector
-is explicit, and combat helpers list battlefield cards; choose creatures and let Forge
-check legality. No identity, ownership, card type or legal target is inferred from a name.
+Your player is identified by hello.playerId. Forge supplies actionable highlights;
+only highlighted cards get declaration controls, and declared attackers retain Remove.
+Type lines are display data, never a substitute for Forge's legality checks.
 The server endpoint is ws://localhost:36800/ws?seat=N. Keep ws-test.html for raw debugging.
 Will performs the full Commander game check manually. Copy the wire log if play is blocked.
 -->
@@ -57,6 +56,12 @@ Will performs the full Commander game check manually. Copy the wire log if play 
   <main class="layout">
     <div id="board" aria-label="Players and zones"></div>
     <aside>
+      <section class="panel"><h2>Deck</h2>
+        <label for="deckText">Paste a Commander deck export</label><br>
+        <textarea id="deckText" rows="8" style="width:100%;box-sizing:border-box"></textarea>
+        <div class="row"><button id="deckSubmit" type="button">Submit deck</button></div>
+        <div id="commanderPicker"></div><div id="deckErrors" aria-live="polite"></div>
+      </section>
       <section class="panel"><h2>Your action</h2><div id="action"></div></section>
       <section class="panel"><h2>Combat</h2><div id="combat"></div></section>
       <section class="panel"><h2>Stack</h2><div id="stack"></div></section>
@@ -118,6 +123,12 @@ Will performs the full Commander game check manually. Copy the wire log if play 
     catch (error) { notice(error.message, 'error'); return false; }
   }
   function action(type, fields = {}) { lastReply = null; return send(type, fields); }
+  function submitDeck() {
+    const commander = [...$('commanderPicker').querySelectorAll('input:checked')].map(input => input.value);
+    send('submitDeck', {text: $('deckText').value, ...(commander.length ? {commander} : {})});
+  }
+  $('deckSubmit').onclick = submitDeck;
+  $('deckText').oninput = () => $('commanderPicker').replaceChildren();
   function button(text, fn, enabled = true) {
     const b = el('button', text); b.type = 'button'; b.disabled = !enabled; b.onclick = fn; return b;
   }
@@ -136,6 +147,7 @@ Will performs the full Commander game check manually. Copy the wire log if play 
   function cardText(card) {
     let text = `${cardName(card)} #${card.id}`;
     if (card.hidden) return text;
+    if (card.types !== undefined) text += ` · ${card.types}`;
     if (card.power !== undefined && card.toughness !== undefined) text += ` · ${card.power}/${card.toughness}`;
     if (card.tapped) text += ' (T)';
     if (card.sick) text += ' · summoning sick';
@@ -277,11 +289,11 @@ Will performs the full Commander game check manually. Copy the wire log if play 
     if (!['declareAttackers', 'declareBlockers'].includes(kind)) {
       root.append(el('p', 'Combat controls appear during declarations.', 'muted')); return;
     }
-    if (!ownPlayer()) { root.append(el('p', 'Choose Your player above to show combat controls.')); return; }
-    root.append(el('p', 'Battlefield cards are listed because card types are not supplied. Choose your creatures; Forge checks legality.', 'muted'));
+    if (!ownPlayer()) { root.append(el('p', 'Waiting for your player in the state.')); return; }
     const battlefield = [...players.values()].flatMap(p => list(p.zones.battlefield));
     const own = battlefield.filter(c => c.controllerId === ownPlayerId && !c.hidden);
     const attacking = kind === 'declareAttackers';
+    const highlighted = new Set(list(input().highlighted).map(h => key(h.id)));
     const targets = attacking ? list(input().attackTargets)
       : battlefield.filter(c => c.attacking).map(c => ({kind:'card', id:c.id}));
     if (attacking) {
@@ -291,16 +303,19 @@ Will performs the full Commander game check manually. Copy the wire log if play 
         const defenderId = selectedTarget(select); if (defenderId) action('attackAll', {defenderId});
       }, canAct() && targets.length > 0)); root.append(row);
     }
-    for (const card of own.filter(c => !attacking || !c.tapped || c.attacking)) {
+    for (const card of own.filter(c => highlighted.has(key(c.id)) || (attacking && c.attacking))) {
       const row = el('div'); row.append(el('p', cardText(card)));
-      const select = targetSelect(`${kind}:${key(card.id)}`, targets, `Target for ${cardName(card)} #${card.id}`);
-      select.disabled = !canAct();
       const controls = el('div', undefined, 'row');
-      controls.append(select, button(attacking ? 'Declare attacker' : 'Declare blocker', () => {
-        const target = selectedTarget(select); if (!target) return;
-        if (attacking) action('declareAttacker', {attackerId:card.id, defenderId:target});
-        else action('declareBlocker', {blockerId:card.id, attackerId:target.id});
-      }, canAct() && targets.length > 0));
+      if (highlighted.has(key(card.id))) {
+        const select = targetSelect(`${kind}:${key(card.id)}`, targets, `Target for ${cardName(card)} #${card.id}`);
+        select.disabled = !canAct();
+        controls.append(select, button(attacking ? 'Declare attacker' : 'Declare blocker', () => {
+          const target = selectedTarget(select); if (!target) return;
+          if (attacking) action('declareAttacker', {attackerId:card.id, defenderId:target});
+          else action('declareBlocker', {blockerId:card.id, attackerId:target.id});
+        }, canAct() && targets.length > 0));
+      }
+      // Forge drops declared attackers from highlights; retain their individual undo.
       controls.append(button(attacking ? 'Remove attacker' : 'Remove blocker', () => {
         action(attacking ? 'undeclareAttacker' : 'undeclareBlocker', {[attacking ? 'attackerId' : 'blockerId']:card.id});
       }, canAct() && (attacking ? !!card.attacking : !!card.blocking)));
@@ -310,16 +325,9 @@ Will performs the full Commander game check manually. Copy the wire log if play 
   }
   function renderSession() {
     const root = $('sessionControls'); root.replaceChildren();
-    const label = el('label', 'Your player '), select = el('select'); select.id = 'yourPlayer';
-    const empty = el('option', 'Choose the player you control…'); empty.value = ''; select.append(empty);
-    for (const p of players.values()) {
-      const option = el('option', `${p.name} · player ${p.id}`); option.value = String(p.id); select.append(option);
-    }
-    if (ownPlayerId !== null && ownPlayer()) select.value = String(ownPlayerId);
-    select.disabled = !state;
-    select.onchange = () => { ownPlayerId = select.value === '' ? null : Number(select.value); render(); };
-    label.append(select); root.append(label, button('Refresh state / pending prompts', () => action('resync'), connected()));
-    if (state && !ownPlayer()) root.append(el('span', 'Choose your player to enable hand/mana/combat controls.', 'muted'));
+    root.append(el('span', ownPlayerId === null ? 'Waiting for seat binding.'
+      : `Your player: ${ownPlayer()?.name ?? ownPlayerId} · player ${ownPlayerId}`),
+      button('Refresh state / pending prompts', () => action('resync'), connected()));
   }
 
   function optionText(o) { return `${o.optionId}: ${o.label}${o.cardRef !== undefined ? ` (#${o.cardRef})` : ''}${o.set ? ` · ${o.set} ${o.num ?? ''}` : ''}`; }
@@ -486,12 +494,28 @@ Will performs the full Commander game check manually. Copy the wire log if play 
   function receive(message) {
     log('IN', message);
     switch (message.type) {
+      case 'deckResult': {
+        $('deckErrors').replaceChildren(el('p', message.ok ? `${message.deckName}: accepted (${message.count} cards).` : 'Deck needs attention.'));
+        for (const error of message.errors) $('deckErrors').append(el('p', `${error.line ? 'Line ' + error.line + ': ' : ''}${error.message}${error.text ? ' — ' + error.text : ''}`, 'error'));
+        for (const warning of message.warnings) $('deckErrors').append(el('p', warning));
+        $('commanderPicker').replaceChildren();
+        if (message.needsCommander) {
+          $('commanderPicker').append(el('p', 'Choose your commander (select both for a legal partner or background pair), then Submit deck.'));
+          for (const name of message.candidates) {
+            const label = el('label'), input = el('input'); input.type = 'checkbox'; input.value = name;
+            label.append(input, document.createTextNode(name)); $('commanderPicker').append(label, el('br'));
+          }
+        }
+        break;
+      }
       case 'hello':
-        welcomed = message.protocolVersion === 1 && message.seat === seat;
+        ownPlayerId = Number.isInteger(message.playerId) ? message.playerId : null;
+        welcomed = message.protocolVersion === 1 && message.seat === seat && ownPlayerId !== null;
+        dropdowns.clear();
         baseSeq = -1; state = null; cards.clear(); players.clear(); stackItems.clear(); pending.clear(); lastReply = null;
         $('promptDialog').close();
         $('status').textContent = welcomed ? `Connected · seat ${seat} · ${message.serverVersion}` : 'Incompatible protocol or seat. Actions disabled.';
-        if (!welcomed) notice('Expected protocolVersion 1 and the requested seat.', 'error'); render(); break;
+        if (!welcomed) notice('Expected protocolVersion 1, the requested seat and a playerId.', 'error'); render(); break;
       case 'state':
         if (!welcomed || !Number.isSafeInteger(message.seq) || message.seq <= baseSeq) break;
         baseSeq = message.seq; state = message; render(); break;

@@ -21,7 +21,7 @@ import java.util.*;
 final class ActionRouter {
     private static final System.Logger LOG = System.getLogger(ActionRouter.class.getName());
     private static final ClientMessageSchema SCHEMA = new ClientMessageSchema();
-    private static final Set<String> LATER = Set.of("join", "submitDeck", "ready", "startGame", "lobbySettings",
+    private static final Set<String> LATER = Set.of("join", "ready", "startGame", "lobbySettings",
             "setYield", "macroRecord", "macroNext", "macroRepeat");
     private static final Set<String> CARD_FIELDS = Set.of("cardId", "attackerId", "blockerId");
     private final JsonSeatRemote remote;
@@ -40,6 +40,7 @@ final class ActionRouter {
         try {
             SCHEMA.validate(message);
             String type = message.get("type").getAsString();
+            if (type.equals("submitDeck")) { writer.submitDeck(message); return; }
             LOG.log(System.Logger.Level.INFO, "[action] {0} clientSeq={1} baseSeq={2}", type,
                     message.get("clientSeq"), message.get("baseSeq"));
             if (type.equals("ping")) { JsonObject pong = new JsonObject(); pong.addProperty("type", "pong"); writer.sendFromIo(pong); result.accept("accepted"); return; }

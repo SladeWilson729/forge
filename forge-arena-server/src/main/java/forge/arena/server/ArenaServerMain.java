@@ -70,7 +70,24 @@ public final class ArenaServerMain {
         // Fixed, distinct precons make the startup reproducible without relying on directory order.
         for (final String name : List.of("Counterpunch [COM] [2011]", "Devour for Power [COM] [2011]",
                 "Heavenly Inferno [COM] [2011]", "Mirror Mastery [COM] [2011]")) {
-            players.add(RegisteredPlayer.forCommander(loadCommanderPrecon(name))
+            String path = System.getProperty("arena.deck.seat" + players.size());
+            Deck deck;
+            if (path == null) deck = loadCommanderPrecon(name);
+            else {
+                final String text;
+                try { text = java.nio.file.Files.readString(java.nio.file.Path.of(path)); }
+                catch (IOException ex) {
+                    System.err.println("[arena] Cannot read deck file " + path + ": " + ex.getMessage());
+                    System.exit(1); return;
+                }
+                DeckImport.Result imported = DeckImport.parse(text, List.of());
+                if (!imported.ok()) {
+                    System.err.println(WsServer.GSON.toJson(imported.json()));
+                    System.exit(1); return;
+                }
+                deck = imported.deck();
+            }
+            players.add(RegisteredPlayer.forCommander(deck)
                     .setPlayer(humanSeats.contains(players.size()) ? new LobbyPlayerHuman("Human " + players.size())
                             : GamePlayerUtil.createAiPlayer("AI " + (players.size() + 1))));
         }

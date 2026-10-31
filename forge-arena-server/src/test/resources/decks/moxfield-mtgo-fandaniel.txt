@@ -1,0 +1,75 @@
+1 Accursed Marauder
+1 Arcane Signet
+1 Archfiend of Despair
+1 Ardyn, the Usurper
+1 Atrocious Experiment
+1 Beacon of Unrest
+1 Blasphemous Edict
+1 Bloodletter of Aclazotz
+1 Boggart Trawler
+1 Bojuka Bog
+1 Breach the Multiverse
+1 Cabal Coffers
+1 Codex Shredder
+1 Command Beacon
+1 Commune with Evil
+1 Cordyceps Excision
+1 Cruel Truths
+1 Crypt Ghast
+1 Cursed Totem
+1 Damnation
+1 Dark Ritual
+1 Darkness
+1 Dauntless Scrapbot
+1 Diresight
+1 Dread Summons
+1 Erebos's Intervention
+1 Expedition Map
+1 Fabled Passage
+1 Feed the Swarm
+1 Fell the Profane
+1 From the Catacombs
+1 Funeral Rites
+1 Hostile Negotiations
+1 Hymn of the Faller
+1 Jet Medallion
+1 Lightning Greaves
+1 Magus of the Will
+1 Mesmeric Orb
+1 Millikin
+1 Moonlight Bargain
+1 Night's Whisper
+1 No Mercy
+1 Nykthos, Shrine to Nyx
+1 Palantír of Orthanc
+1 Perpetual Timepiece
+1 Plaguecrafter
+1 Primal Amulet
+1 Prismatic Vista
+1 Ransack the Lab
+1 Reanimate
+1 Resentful Revelation
+1 Ripples of Undeath
+1 Sheoldred, Whispering One
+1 Sheoldred's Edict
+1 Sign in Blood
+27 Snow-Covered Swamp
+1 Sol Ring
+1 Soul Shatter
+1 Strionic Resonator
+1 Summon Undead
+1 Swiftfoot Boots
+1 Takenuma, Abandoned Mire
+1 The Warring Triad
+1 Their Number Is Legion
+1 Toxic Deluge
+1 Urborg, Tomb of Yawgmoth
+1 Urza's Cave
+1 Vona's Hunger
+1 War Room
+1 Will of the Abzan
+1 Withering Torment
+1 Yawgmoth's Will
+1 Zero Point Ballad
+
+1 Fandaniel, Telophoroi Ascian

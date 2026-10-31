@@ -203,7 +203,7 @@ All server messages require `seq: integer >= 0`, increasing per seat. Client gam
 |---|---|---|
 | `hello` | `protocolVersion`: const `1`; `serverVersion`: string; `seat`: integer; `playerId`: `PlayerRef` | RegisteredPlayer binding supplies the Forge player id; hello waits for binding, then precedes cached state/pending prompts; no ProtocolMethod |
 | `lobby` | `seats?`: array of JSON value (unresolved; see $comment) | New Lobby; no ProtocolMethod |
-| `deckResult` | `ok`: boolean; `errors`: array of string | New DeckImport; no ProtocolMethod |
+| `deckResult` | `ok`, `needsCommander`: boolean; `candidates`, `warnings`, `commander`: string arrays; `errors`: array of `{line: integer, text: string, message: string}`; `count`: integer; `deckName`: string | DeckImport; submitDeck accepts `text` and optional `commander`: array of names |
 | `state` | `turn`: `Int32`; `activePlayerId`: `PlayerRef` or null; `priorityPlayerId`: `PlayerRef` or null; `phase`: `PhaseType` or null; `monarchId`: `PlayerRef` or null; `initiativeId`: `PlayerRef` or null; `players`: array of `Player`; `stack`: array of `StackItem`; `activeInput`: `ActiveInput` | setGameView and applyDelta with objects; display calls update activeInput |
 | `event` | `kind`: `EventKind`; `stateSeq`: `Sequence`; `cardIds?`: array of `CardRef`; `playerIds?`: array of `PlayerRef`; `from?`: `ZoneRef` or null; `to?`: `ZoneRef` or null; `amount?`: `Int32`; `result?`: kind-specific boolean/integer/planar enum; `cardStubs?`: array of `Card`; remaining fields are defined per kind below | applyDelta.events / handleGameEvents and showRevealedCards; source table below |
 | `log` | `text`: string; `entryType`: `GameLogEntryType` | GameEventAddLog.message via GameLog/GameLogEntry, PayloadFilter |
@@ -534,7 +534,9 @@ The original task 1.1 questions are retained below, followed by their plan 3.5 d
 
   Default (plan 3.5): Lobby, deck result and clock shapes are defined with the lobby work. Finished in task 1.11, 1.12.
 
-  Status: default, finished in task 1.11, 1.12
+  Status: deck import decided (task 1.11); remaining lobby and clock fields finished in task 1.12.
+
+  Deck import resolves explicit Forge sections before Archidekt Commander tags, then the submitted override. Unmarked lists return needsCommander and legal candidates without guessing. Line 0 denotes a whole-deck problem or an override that is absent from the text. Accepted decks are retained per seat for the next game. Banlist hits are warnings under the house rule. `arena.deck.seatN` imports a UTF-8 text file through the same validator during startup; missing commander markings require a marked export for this file-based path.
 
 - **E12.** Will, confirm that drawOfferAction and updateDrawOffer stay ignored: section 3.3 explicitly excludes draw offers in v1, while this task cites drawOfferAction as a possible gap. No replacement message is added here.
 

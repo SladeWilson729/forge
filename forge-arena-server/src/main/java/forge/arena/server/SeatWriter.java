@@ -14,6 +14,7 @@ import java.util.concurrent.locks.LockSupport;
 
 /** One daemon per seat; no Forge objects or mutable JSON cross to this thread. */
 public final class SeatWriter implements AutoCloseable {
+    private static final ClientMessageSchema DECK_MESSAGES = new ClientMessageSchema();
     private static final System.Logger LOG = System.getLogger(SeatWriter.class.getName());
     private record Outbound(long seq, String json, boolean state, long stateSeq) { }
     record GameStart(java.time.ZonedDateTime time, long nanos) { }
@@ -26,6 +27,21 @@ public final class SeatWriter implements AutoCloseable {
     private final ConcurrentLinkedQueue<String> ioMessages = new ConcurrentLinkedQueue<>();
     private final ConcurrentLinkedQueue<Runnable> transcriptWork = new ConcurrentLinkedQueue<>();
     private TranscriptLog transcript;
+    private volatile forge.deck.Deck acceptedDeck;
+
+    forge.deck.Deck acceptedDeck() { return acceptedDeck; }
+
+    void submitDeck(JsonObject message) {
+        final long when = System.nanoTime();
+        forge.gui.FThreads.invokeInEdtLater(() -> {
+            java.util.List<String> commander = new java.util.ArrayList<>();
+            if (message.has("commander")) message.getAsJsonArray("commander").forEach(name -> commander.add(name.getAsString()));
+            DeckImport.Result result = DeckImport.parse(message.get("text").getAsString(), commander);
+            if (result.ok()) acceptedDeck = result.deck();
+            send(result.json());
+            transcriptInput(message, result.ok() ? "accepted" : "rejected", when);
+        });
+    }
     private int transcriptGame = -1;
     private volatile JsonSeatRemote remote;
     private final Thread thread;
@@ -162,6 +178,15 @@ public final class SeatWriter implements AutoCloseable {
     }
 
     void action(final JsonObject message) {
+        if (message.has("type") && "submitDeck".equals(message.get("type").getAsString())) {
+            try { DECK_MESSAGES.validate(message); submitDeck(message); }
+            catch (IllegalArgumentException ex) {
+                JsonObject rejected = new JsonObject(); rejected.addProperty("type", "message");
+                rejected.addProperty("level", "rejected"); rejected.addProperty("text", ex.getMessage()); sendFromIo(rejected);
+                transcriptInput(message, "rejected", System.nanoTime());
+            }
+            return;
+        }
         final JsonSeatRemote receiver = remote;
         final long when = System.nanoTime();
         if (receiver != null) receiver.action(message, result -> transcriptInput(message, result, when));

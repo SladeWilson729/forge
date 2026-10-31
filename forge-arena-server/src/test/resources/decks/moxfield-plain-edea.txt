@@ -1,0 +1,87 @@
+1 Agent Venom
+1 Arcane Denial
+1 Arcane Signet
+1 Arid Mesa
+1 Attrition
+1 Ayara, Widow of the Realm
+1 Badlands
+1 Baleful Strix
+1 Blasphemous Act
+1 Blood Crypt
+1 Bloodstained Mire
+1 Bone Shards
+1 Braids, Arisen Nightmare
+1 Breath of Fury
+1 Chameleon, Master of Disguise
+1 Chart a Course
+1 Chrome Mox
+1 City of Brass
+1 Command Tower
+1 Cunning Rhetoric
+1 Dark Ritual
+1 Deadly Dispute
+1 Desperate Ritual
+1 Disciple of Bolas
+1 Disrupt Decorum
+1 Ember Island Production
+1 Exotic Orchard
+1 Feed the Swarm
+1 Fellwar Stone
+1 Fling
+1 Flooded Strand
+1 Full Throttle
+1 Gogo, Master of Mimicry
+1 Impostor Syndrome
+1 Invert Polarity
+1 Irenicus's Vile Duplication
+6 Island
+1 Kazuul's Fury
+1 Kethek, Crucible Goliath
+1 Mana Confluence
+1 Marsh Flats
+1 Misty Rainforest
+1 Morbid Opportunist
+6 Mountain
+1 Nasty End
+1 Nightscape Familiar
+1 No Mercy
+1 Polluted Delta
+1 Prismatic Vista
+1 Propaganda
+1 Quantum Misalignment
+1 Rakdos Charm
+1 Rakdos, the Muscle
+1 Redirect Lightning
+1 Sakashima of a Thousand Faces
+1 Saw in Half
+1 Scalding Tarn
+1 Seize the Day
+1 Seize the Spotlight
+1 Skullclamp
+1 Slip Out the Back
+1 Sol Ring
+1 Spark Double
+1 Steam Vents
+5 Swamp
+1 Talisman of Creativity
+1 Talisman of Dominance
+1 Talisman of Indulgence
+1 Terminate
+1 The Beast, Deathless Prince
+1 The Golden Throne
+1 Toxic Deluge
+1 Underground Sea
+1 Untimely Malfunction
+1 Vandalblast
+1 Verdant Catacombs
+1 Village Rites
+1 Volcanic Island
+1 Warren Soultrader
+1 Watery Grave
+1 Withering Torment
+1 Wooded Foothills
+1 Xander's Lounge
+1 Yawgmoth, Thran Physician
+1 Zara, Renegade Recruiter
+
+1 Edea, Possessed Sorceress
