@@ -67,6 +67,9 @@ public final class ArenaServerMain {
         try { ChessClock.minutes(System.getProperty("arena.clockMinutes", "0")); }
         catch (IllegalArgumentException ex) { System.err.println("[arena] " + ex.getMessage()); System.exit(1); return; }
         initializeForge();
+        final ArenaPuzzle puzzle;
+        try { puzzle = System.getProperty("arena.puzzle") == null ? null : ArenaPuzzle.read(java.nio.file.Path.of(System.getProperty("arena.puzzle"))); }
+        catch (IOException | IllegalArgumentException ex) { System.err.println("[arena] Cannot load puzzle: " + ex.getMessage()); System.exit(1); return; }
         final Set<Integer> humanSeats = humanSeats(System.getProperty("arena.humanSeats", ""));
         final List<RegisteredPlayer> players = new ArrayList<>();
         // Fixed, distinct precons make the startup reproducible without relying on directory order.
@@ -129,6 +132,7 @@ public final class ArenaServerMain {
             match.setStartGameHook(() -> {
                 // HostedMatch otherwise automatically continues an all-AI match into another game.
                 match.getGame().getRules().setGamesPerMatch(1);
+                if (puzzle != null) puzzle.apply(match.getGame(), players);
                 if (!humanSeats.isEmpty()) {
                     match.getGame().subscribeToEvents(new TurnLogger());
                     // PhaseHandler.setupFirstTurn runs this on Game-* before mainGameLoop's
@@ -142,6 +146,15 @@ public final class ArenaServerMain {
                 for (final SeatProtocolGui gui : seatViews) {
                     gui.getForwarder().flush();
                     gui.updateGameView();
+                }
+                // HostedMatch normally flushes humans after this hook returns.
+                // Flush here too, before releasing the lifecycle thread to finalize
+                // the meter, so the report includes the final state/events for humans.
+                if (Boolean.getBoolean("arena.meter")) for (Player player : match.getGame().getRegisteredPlayers()) {
+                    if (player.getController() instanceof PlayerControllerHuman human
+                            && human.getGui() instanceof ProtocolGuiGame gui && gui.getForwarder() != null) {
+                        gui.getForwarder().flush(); gui.updateGameView();
+                    }
                 }
                 finished.countDown();
             });
@@ -165,6 +178,7 @@ public final class ArenaServerMain {
             }
             final GameOutcome outcome = game.getOutcome();
             System.out.println("[arena] Winner: " + (outcome.isDraw() ? "Draw" : outcome.getWinningLobbyPlayer().getName()));
+            wsServer.finishMeters();
             if (Boolean.getBoolean("arena.hold")) {
                 console.awaitEnter();
             }

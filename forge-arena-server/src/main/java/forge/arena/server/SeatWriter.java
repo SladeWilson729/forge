@@ -46,6 +46,15 @@ public final class SeatWriter implements AutoCloseable {
     private final Thread thread;
     private final int seat;
     private final ChessClock clock;
+    private final BandwidthMeter bandwidth;
+    private volatile BandwidthMeter.Row meter;
+    private int pendingPayloadWrites;
+    private boolean finishMeter;
+    private final java.util.List<java.util.concurrent.CompletableFuture<BandwidthMeter.Snapshot>> meterReaders = new java.util.ArrayList<>();
+    static final class PayloadFrame extends TextWebSocketFrame {
+        final BandwidthMeter.Row meter;
+        PayloadFrame(String json, BandwidthMeter.Row meter) { super(json); this.meter = meter; }
+    }
     private final java.util.concurrent.ConcurrentMap<Integer, GameStart> gameStarts;
     private volatile String hello;
     private Outbound pendingState;
@@ -133,9 +142,13 @@ public final class SeatWriter implements AutoCloseable {
     }
 
     SeatWriter(int seat, java.util.concurrent.ConcurrentMap<Integer, GameStart> gameStarts, ChessClock clock) {
+        this(seat, gameStarts, clock, null);
+    }
+    SeatWriter(int seat, java.util.concurrent.ConcurrentMap<Integer, GameStart> gameStarts, ChessClock clock, BandwidthMeter bandwidth) {
         this.seat = seat;
         this.gameStarts = gameStarts;
         this.clock = clock;
+        this.bandwidth = bandwidth;
         thread = new Thread(this::run, "Arena-seat-writer-" + seat);
         thread.setDaemon(true);
         thread.start();
@@ -165,6 +178,7 @@ public final class SeatWriter implements AutoCloseable {
                     if (transcript != null) transcript.close();
                     transcriptGame = gameId;
                     transcript = new TranscriptLog(seat, playerId, start.time(), start.nanos());
+                    if (bandwidth != null) { meter = bandwidth.game(gameId, start).seats[seat]; finishMeter = false; }
                 }
                 bindPlayer(playerId);
             });
@@ -198,6 +212,39 @@ public final class SeatWriter implements AutoCloseable {
     void flushTranscript() {
         transcriptWork.add(() -> { if (transcript != null) transcript.flush(); });
         LockSupport.unpark(thread);
+    }
+
+    // Netty supplies primitive completion data; all counting happens on this writer.
+    void frameWritten(BandwidthMeter.Row row, int bytes, boolean state, boolean owned, boolean success, long at) {
+        transcriptWork.add(() -> {
+            if (success && row != null) row.wrote(bytes, state, at);
+            if (owned) pendingPayloadWrites--;
+        });
+        LockSupport.unpark(thread);
+    }
+    BandwidthMeter.Row meterRow() { return meter; }
+    java.util.concurrent.CompletableFuture<BandwidthMeter.Snapshot> meterSnapshot() {
+        if (bandwidth == null) return java.util.concurrent.CompletableFuture.completedFuture(null);
+        var result = new java.util.concurrent.CompletableFuture<BandwidthMeter.Snapshot>();
+        transcriptWork.add(() -> meterReaders.add(result)); LockSupport.unpark(thread); return result;
+    }
+    void finishMeter() {
+        if (bandwidth == null) return;
+        transcriptWork.add(() -> finishMeter = true); LockSupport.unpark(thread);
+    }
+    private void pollMeter() {
+        if (bandwidth == null) return;
+        long at = System.nanoTime();
+        if (meter != null) meter.poll(at);
+        if (pendingPayloadWrites != 0) return;
+        for (var reader : meterReaders) reader.complete(meter == null ? null : meter.snapshot(at));
+        meterReaders.clear();
+        boolean drained;
+        synchronized (queueLock) { drained = messages.isEmpty() && (!connected() || pendingState == null); }
+        if (finishMeter && (closed || drained) && ioMessages.isEmpty() && transcriptWork.isEmpty()) {
+            for (var report : bandwidth.reports()) report.seats[seat].finish(at);
+            finishMeter = false;
+        }
     }
 
     /** Serialize on the calling Forge-safe thread. The short leaf lock never calls Forge or Netty. */
@@ -310,7 +357,7 @@ public final class SeatWriter implements AutoCloseable {
         }
         tail.add("entries", entries); write(WsServer.GSON.toJson(tail));
         if (lastState != null) {
-            write(lastState); nextStateAt = System.nanoTime() + STATE_INTERVAL;
+            writeTo(channel, lastState, null, false, true); nextStateAt = System.nanoTime() + STATE_INTERVAL;
         }
         java.util.List<JsonObject> newerLogs;
         synchronized (queueLock) {
@@ -362,9 +409,11 @@ public final class SeatWriter implements AutoCloseable {
     }
 
     private void run() {
-        while (!closed) {
+        while (!closed || pendingPayloadWrites != 0) {
             Runnable work;
             while ((work = transcriptWork.poll()) != null) work.run();
+            pollMeter();
+            if (closed) { LockSupport.parkNanos(this, TimeUnit.MILLISECONDS.toNanos(1)); continue; }
             if (transcript != null) transcript.flushIfDue();
             if (resyncRequested.getAndSet(false)) replayPending = true;
             JsonObject ioMessage;
@@ -424,11 +473,12 @@ public final class SeatWriter implements AutoCloseable {
                 }
                 JsonObject payload = next.payload();
                 Integer requestId = "prompt".equals(payload.get("type").getAsString()) ? payload.get("requestId").getAsInt() : null;
-                writeTo(channel, next.json(), requestId, payload.has("kind") && "gameOver".equals(payload.get("kind").getAsString()));
+                writeTo(channel, next.json(), requestId, payload.has("kind") && "gameOver".equals(payload.get("kind").getAsString()), next.state());
             }
         }
         Runnable work;
         while ((work = transcriptWork.poll()) != null) work.run();
+        pollMeter();
         if (transcript != null) {
             if (channel != null && !connectionClosed) {
                 transcript.record("conn", "{\"type\":\"closed\"}", null, System.nanoTime());
@@ -471,9 +521,19 @@ public final class SeatWriter implements AutoCloseable {
     }
 
     private void writeTo(Channel target, final String json, Integer requestId, boolean gameOver) {
+        writeTo(target, json, requestId, gameOver, false);
+    }
+    private void writeTo(Channel target, final String json, Integer requestId, boolean gameOver, boolean state) {
         if (target != null && target.isActive()) {
             if (remote != null && requestId != null) remote.promptDelivered(requestId, json);
-            target.writeAndFlush(new TextWebSocketFrame(json));
+            TextWebSocketFrame frame = meter == null ? new TextWebSocketFrame(json) : new PayloadFrame(json, meter);
+            if (frame instanceof PayloadFrame measured) {
+                pendingPayloadWrites++;
+                int bytes = frame.content().readableBytes();
+                // Listen to the write itself: even an already-removed pipeline must
+                // retire a failed write rather than strand shutdown's pending count.
+                target.writeAndFlush(frame).addListener(done -> frameWritten(measured.meter, bytes, state, true, done.isSuccess(), System.nanoTime()));
+            } else target.writeAndFlush(frame);
             if (transcript != null) transcript.record("out", json, null, System.nanoTime());
             if (transcript != null && gameOver) transcript.flush();
         }

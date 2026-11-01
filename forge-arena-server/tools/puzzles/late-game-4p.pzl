@@ -1,0 +1,47 @@
+# Shared Task 1.15/1.15b board: 33 permanents, 7 hand, 40 library, 8 graveyard, 3 exile per seat.
+# Standard Forge GameState. Arena comments restore multiplayer combat and actual stack zones.
+activeplayer=p0
+activephase=MAIN1
+turn=21
+removesummoningsickness=true
+p0life=35
+p0counters=POISON=0
+p0battlefield=Plains|Tapped;Island;Swamp|Tapped;Mountain;Forest|Tapped;Plains;Island|Tapped;Swamp;Mountain|Tapped;Forest;Plains|Tapped;Island;Swamp|Tapped;Mountain;Forest|Tapped;Kenrith, the Returned King|IsCommander|NoETBTrigs;Colossal Dreadmaw|Id:100|Counters:P1P1=3,SHIELD=1;Llanowar Elves;Birds of Paradise;Selesnya Guildmage;Steel Overseer;Walking Ballista|Counters:P1P1=5;Jace Beleren|Counters:LOYALTY=5;Garruk Wildspeaker|Counters:LOYALTY=4;Sol Ring|Tapped;Arcane Signet;Rancor|AttachedTo:100;Sword of the Animist|AttachedTo:100;T:g_1_1_saproling;T:g_1_1_saproling;T:g_1_1_saproling;T:g_1_1_saproling;Vesuvan Shapeshifter|FaceDown
+p0hand=Aetherling;Cryptic Serpent;Fact or Fiction;Pongify;Rapid Hybridization;Dig Through Time;Mystic Confluence
+p0command=
+p0library=Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains
+p0graveyard=Cultivate;Rampant Growth;Swords to Plowshares;Counterspell;Evolving Wilds;Eternal Witness;Sakura-Tribe Elder;Farseek
+p0exile=Path to Exile;Lightning Greaves;Chromatic Lantern
+p1life=32
+p1counters=POISON=1
+p1battlefield=Plains|Tapped;Island;Swamp|Tapped;Mountain;Forest|Tapped;Plains;Island|Tapped;Swamp;Mountain|Tapped;Forest;Plains|Tapped;Island;Swamp|Tapped;Mountain;Forest|Tapped;Atraxa, Praetors' Voice|IsCommander|NoETBTrigs;Colossal Dreadmaw|Id:101|Counters:P1P1=3,SHIELD=1;Llanowar Elves;Birds of Paradise;Selesnya Guildmage;Steel Overseer;Walking Ballista|Counters:P1P1=5;Jace Beleren|Counters:LOYALTY=5;Garruk Wildspeaker|Counters:LOYALTY=4;Sol Ring|Tapped;Arcane Signet;Rancor|AttachedTo:101;Sword of the Animist|AttachedTo:101;T:g_1_1_saproling;T:g_1_1_saproling;T:g_1_1_saproling;T:g_1_1_saproling;Willbender|FaceDown
+p1hand=Avenger of Zendikar;Beast Within;Harmonize;Krosan Grip;Nature's Lore;Return of the Wildspeaker;Heroic Intervention
+p1command=
+p1library=Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains
+p1graveyard=Cultivate;Rampant Growth;Swords to Plowshares;Counterspell;Evolving Wilds;Eternal Witness;Sakura-Tribe Elder;Farseek
+p1exile=Path to Exile;Lightning Greaves;Chromatic Lantern
+p2life=29
+p2counters=POISON=2
+p2battlefield=Plains|Tapped;Island;Swamp|Tapped;Mountain;Forest|Tapped;Plains;Island|Tapped;Swamp;Mountain|Tapped;Forest;Plains|Tapped;Island;Swamp|Tapped;Mountain;Forest|Tapped;Muldrotha, the Gravetide|IsCommander|NoETBTrigs;Colossal Dreadmaw|Id:102|Counters:P1P1=3,SHIELD=1;Llanowar Elves;Birds of Paradise;Selesnya Guildmage;Steel Overseer;Walking Ballista|Counters:P1P1=5;Jace Beleren|Counters:LOYALTY=5;Garruk Wildspeaker|Counters:LOYALTY=4;Sol Ring|Tapped;Arcane Signet;Rancor|AttachedTo:102;Sword of the Animist|AttachedTo:102;T:g_1_1_saproling;T:g_1_1_saproling;T:g_1_1_saproling;T:g_1_1_saproling;Den Protector|FaceDown
+p2hand=Gray Merchant of Asphodel;Read the Bones;Feed the Swarm;Damnation;Victimize;Sign in Blood;Reanimate
+p2command=
+p2library=Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains
+p2graveyard=Cultivate;Rampant Growth;Swords to Plowshares;Counterspell;Evolving Wilds;Eternal Witness;Sakura-Tribe Elder;Farseek
+p2exile=Path to Exile;Lightning Greaves;Chromatic Lantern
+p3life=26
+p3counters=POISON=3
+p3battlefield=Plains|Tapped;Island;Swamp|Tapped;Mountain;Forest|Tapped;Plains;Island|Tapped;Swamp;Mountain|Tapped;Forest;Plains|Tapped;Island;Swamp|Tapped;Mountain;Forest|Tapped;Breya, Etherium Shaper|IsCommander|NoETBTrigs;Colossal Dreadmaw|Id:103|Counters:P1P1=3,SHIELD=1;Llanowar Elves;Birds of Paradise;Selesnya Guildmage;Steel Overseer;Walking Ballista|Counters:P1P1=5;Jace Beleren|Counters:LOYALTY=5;Garruk Wildspeaker|Counters:LOYALTY=4;Sol Ring|Tapped;Arcane Signet;Rancor|AttachedTo:103;Sword of the Animist|AttachedTo:103;T:g_1_1_saproling;T:g_1_1_saproling;T:g_1_1_saproling;T:g_1_1_saproling;Fathom Seer|FaceDown
+p3hand=Sun Titan;Generous Gift;Austere Command;Wrath of God;Teferi's Protection;Esper Sentinel;Smothering Tithe
+p3command=
+p3library=Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains;Plains
+p3graveyard=Cultivate;Rampant Growth;Swords to Plowshares;Counterspell;Evolving Wilds;Eternal Witness;Sakura-Tribe Elder;Farseek
+p3exile=Path to Exile;Lightning Greaves;Chromatic Lantern
+# Arena extension syntax: phase,active wire seat,turn; card references use wire-seat|exact name.
+#arena-phase=COMBAT_DECLARE_BLOCKERS,0,21
+#arena-attack=0|Colossal Dreadmaw|1
+#arena-attack=0|Kenrith, the Returned King|2
+#arena-block=0|Colossal Dreadmaw|1|Colossal Dreadmaw
+#arena-block=0|Colossal Dreadmaw|1|Steel Overseer
+#arena-stack=0|Opt
+#arena-stack=1|Brainstorm
+#arena-stack=2|Impulse

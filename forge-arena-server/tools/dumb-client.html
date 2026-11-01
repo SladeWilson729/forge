@@ -4,6 +4,7 @@ Forge Arena fallback client (no build step or dependencies).
 Start .run/ArenaServerHuman0.run.xml in IntelliJ: ArenaServer (human 0).
 It starts seat 0 human, three bots, and holds the server open after the game.
 Open this file directly in a browser; append ?seat=0 (or another wire seat).
+For Tailscale, use ?seat=0&host=100.x.y.z (or host=100.x.y.z:36800).
 Your player is identified by hello.playerId. Forge supplies actionable highlights;
 only highlighted cards get declaration controls, and declared attackers retain Remove.
 Type lines are display data, never a substitute for Forge's legality checks.
@@ -94,7 +95,11 @@ Will performs the full Commander game check manually. Copy the wire log if play 
   const list = value => Array.isArray(value) ? value : [];
   const querySeat = new URLSearchParams(location.search).get('seat') ?? '0';
   const seat = /^[0-3]$/.test(querySeat) ? Number(querySeat) : 0;
-  const endpoint = `ws://localhost:36800/ws?seat=${seat}`;
+  const host = new URLSearchParams(location.search).get('host') || 'localhost:36800';
+  const endpointUrl = new URL(`ws://${host}`);
+  if (!/:\d+$/.test(host)) endpointUrl.port = '36800'; // Preserve explicit port 80 too.
+  endpointUrl.pathname = '/ws'; endpointUrl.search = `seat=${seat}`;
+  const endpoint = endpointUrl.href;
   $('endpoint').textContent = endpoint;
   let socket, welcomed = false, state = null, baseSeq = -1, clientSeq = 0;
   let reconnectDelay = 1000;

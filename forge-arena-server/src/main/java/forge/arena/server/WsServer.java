@@ -41,6 +41,8 @@ public final class WsServer implements AutoCloseable {
     private final ChannelGroup channels = new DefaultChannelGroup(GlobalEventExecutor.INSTANCE);
     private final SeatWriter[] writers = new SeatWriter[4];
     private final ChessClock clock;
+    private final BandwidthMeter bandwidth = Boolean.getBoolean("arena.meter") ? new BandwidthMeter() : null;
+    private static final io.netty.util.AttributeKey<SeatWriter> METER_SEAT = io.netty.util.AttributeKey.valueOf("arena-meter-seat");
     private Channel serverChannel;
 
     public WsServer(final String host, final int port) {
@@ -55,7 +57,7 @@ public final class WsServer implements AutoCloseable {
         }, automaticTicks);
         final java.util.concurrent.ConcurrentMap<Integer, SeatWriter.GameStart> gameStarts = new java.util.concurrent.ConcurrentHashMap<>();
         for (int seat = 0; seat < writers.length; seat++) {
-            writers[seat] = new SeatWriter(seat, gameStarts, clock);
+            writers[seat] = new SeatWriter(seat, gameStarts, clock, bandwidth);
         }
     }
 
@@ -73,6 +75,18 @@ public final class WsServer implements AutoCloseable {
                     protected void initChannel(final SocketChannel channel) {
                         channels.add(channel);
                         channel.pipeline().addLast(new HttpServerCodec(), new HttpObjectAggregator(65536),
+                                new io.netty.channel.ChannelOutboundHandlerAdapter() {
+                                    @Override public void write(ChannelHandlerContext ctx, Object msg, io.netty.channel.ChannelPromise promise) throws Exception {
+                                        SeatWriter owner = ctx.channel().attr(METER_SEAT).get();
+                                        if (bandwidth != null && owner != null && !(msg instanceof SeatWriter.PayloadFrame)
+                                                && msg instanceof io.netty.handler.codec.http.websocketx.WebSocketFrame frame) {
+                                            int bytes = frame.content().readableBytes();
+                                            BandwidthMeter.Row row = owner.meterRow();
+                                            promise.addListener(done -> owner.frameWritten(row, bytes, false, false, done.isSuccess(), System.nanoTime()));
+                                        }
+                                        super.write(ctx, msg, promise);
+                                    }
+                                },
                                 // Netty 4.1.115 checkStartsWith accepts '?' after /ws.
                                 new WebSocketServerProtocolHandler(WebSocketServerProtocolConfig.newBuilder()
                                         .websocketPath("/ws").checkStartsWith(true).build()), new MessageHandler());
@@ -97,12 +111,17 @@ public final class WsServer implements AutoCloseable {
     }
 
     ChessClock clock() { return clock; }
+    void finishMeters() { for (SeatWriter writer : writers) writer.finishMeter(); }
 
     /** Stop and await both groups on the lifecycle owner thread. */
     @Override
     public void close() {
         checkLifecycleThread();
         clock.close();
+        finishMeters();
+        // Complete or fail all meter-observed writes before joining the writers;
+        // a non-reading disconnected peer must not strand shutdown indefinitely.
+        if (bandwidth != null) channels.close().syncUninterruptibly();
         for (final SeatWriter writer : writers) {
             writer.close();
         }
@@ -141,6 +160,7 @@ public final class WsServer implements AutoCloseable {
                     // No bridge lock or wait on I/O: the seat writer serializes hello, cached
                     // state, replacement and live sends, so handshake races cannot reorder them.
                     seat = Integer.parseInt(seats.get(0));
+                    if (bandwidth != null) ctx.channel().attr(METER_SEAT).set(writer(seat));
                     writer(seat).connect(ctx.channel());
                 } catch (final IllegalArgumentException ex) {
                     ctx.writeAndFlush(new CloseWebSocketFrame(1008, "Invalid seat: use /ws?seat=N, N=0..3"))

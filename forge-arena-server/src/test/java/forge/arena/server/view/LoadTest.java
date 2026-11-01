@@ -4,12 +4,9 @@ import com.google.gson.*;
 import forge.arena.server.*;
 import forge.game.*;
 import forge.game.card.Card;
-import forge.game.combat.Combat;
 import forge.game.event.GameEventAddLog;
 import forge.game.event.GameEventCardChangeZone;
-import forge.game.phase.PhaseType;
 import forge.game.player.Player;
-import forge.game.spellability.SpellAbility;
 import forge.game.zone.ZoneType;
 import forge.localinstance.properties.ForgePreferences.FPref;
 import forge.model.FModel;
@@ -34,12 +31,6 @@ import static org.testng.Assert.*;
 @Test(singleThreaded = true)
 public class LoadTest {
     private static final int WARMUP = 50, SAMPLES = 200;
-    private static final String[][] HANDS = {
-            {"Aetherling", "Cryptic Serpent", "Fact or Fiction", "Pongify", "Rapid Hybridization", "Dig Through Time", "Mystic Confluence"},
-            {"Avenger of Zendikar", "Beast Within", "Harmonize", "Krosan Grip", "Nature's Lore", "Return of the Wildspeaker", "Heroic Intervention"},
-            {"Gray Merchant of Asphodel", "Read the Bones", "Feed the Swarm", "Damnation", "Victimize", "Sign in Blood", "Reanimate"},
-            {"Sun Titan", "Generous Gift", "Austere Command", "Wrath of God", "Teferi's Protection", "Esper Sentinel", "Smothering Tithe"}
-    };
     private record Ref(int id, String zone, boolean faceDown, boolean visible) { }
     private record Measurements(long[] bytes, long[] build, long[] pipeline, long[] highlights, long[] log, long[] mapper,
                                 Map<String, Long> fields, int references) { }
@@ -84,67 +75,32 @@ public class LoadTest {
         return setup.get(30, TimeUnit.SECONDS);
     }
 
-    private static ScenarioGame loadPuzzle(ScenarioGame scenario) {
-        List<String> lines = new ArrayList<>(List.of("activeplayer=p0", "activephase=MAIN1", "turn=21", "removesummoningsickness=true"));
-        String[] commanders = {"Kenrith, the Returned King", "Atraxa, Praetors' Voice", "Muldrotha, the Gravetide", "Breya, Etherium Shaper"};
+    static ScenarioGame loadPuzzle(ScenarioGame scenario) throws Exception {
+        ArenaPuzzle.read(Path.of("tools/puzzles/late-game-4p.pzl")).apply(scenario.game);
         for (int seat = 0; seat < 4; seat++) {
-            int anchor = 100 + seat;
-            List<String> battlefield = new ArrayList<>();
-            for (int land = 0; land < 15; land++) battlefield.add(new String[] {"Plains", "Island", "Swamp", "Mountain", "Forest"}[land % 5] + (land % 2 == 0 ? "|Tapped" : ""));
-            battlefield.addAll(List.of(commanders[seat] + "|IsCommander|NoETBTrigs", "Colossal Dreadmaw|Id:" + anchor + "|Counters:P1P1=3,SHIELD=1",
-                    "Llanowar Elves", "Birds of Paradise", "Selesnya Guildmage", "Steel Overseer", "Walking Ballista|Counters:P1P1=5",
-                    "Jace Beleren|Counters:LOYALTY=5", "Garruk Wildspeaker|Counters:LOYALTY=4", "Sol Ring|Tapped", "Arcane Signet",
-                    "Rancor|AttachedTo:" + anchor, "Sword of the Animist|AttachedTo:" + anchor));
-            for (int token = 0; token < 4; token++) battlefield.add("T:g_1_1_saproling");
-            String p = "p" + seat;
-            lines.add(p + "life=" + (35 - seat * 3)); lines.add(p + "counters=POISON=" + seat);
-            lines.add(p + "battlefield=" + String.join(";", battlefield));
-            lines.add(p + "hand="); lines.add(p + "command=");
-            lines.add(p + "library=" + String.join(";", Collections.nCopies(40, "Plains")));
-            lines.add(p + "graveyard=Cultivate;Rampant Growth;Swords to Plowshares;Counterspell;Evolving Wilds;Eternal Witness;Sakura-Tribe Elder;Farseek");
-            lines.add(p + "exile=Path to Exile;Lightning Greaves;Chromatic Lantern");
-        }
-        GameState puzzle = new GameState(); puzzle.parse(lines); puzzle.applyToGame(scenario.game);
-        for (int seat = 0; seat < 4; seat++) {
-            for (String name : HANDS[seat]) scenario.addCardToZone(name, seat, ZoneType.Hand);
-            // Unique synthetic printing metadata lets the existing whole-JSON scanner
-            // detect a leak without matching a public card's shared edition/collector number.
-            Card faceDown = scenario.addCardToZone(new String[] {"Vesuvan Shapeshifter", "Willbender", "Den Protector", "Fathom Seer"}[seat], seat, ZoneType.Battlefield);
-            assertTrue(faceDown.turnFaceDown());
-        }
-        // GameState.handleCombat is explicitly 1v1-only. Public Combat APIs supply
-        // the same four-player puzzle's attackers/blockers without running a game loop.
-        scenario.game.getPhaseHandler().devModeSet(PhaseType.COMBAT_DECLARE_BLOCKERS, scenario.player(0), 21);
-        Combat combat = new Combat(scenario.player(0)); scenario.game.getPhaseHandler().setCombat(combat);
-        Card attacker = find(scenario.player(0), "Colossal Dreadmaw");
-        combat.addAttacker(attacker, scenario.player(1));
-        combat.addAttacker(find(scenario.player(0), "Kenrith, the Returned King"), scenario.player(2));
-        combat.addBlocker(attacker, find(scenario.player(1), "Colossal Dreadmaw"));
-        combat.addBlocker(attacker, find(scenario.player(1), "Steel Overseer"));
-        scenario.game.updateCombatForView();
-        for (int i = 0; i < 3; i++) {
-            Card card = scenario.addCardToZone(new String[] {"Opt", "Brainstorm", "Impulse"}[i], i, ZoneType.Hand);
-            SpellAbility ability = card.getFirstSpellAbility(); ability.setActivatingPlayer(scenario.player(i));
-            card = scenario.game.getAction().moveToStack(card, ability); ability.setHostCard(card);
-            scenario.game.getStack().add(ability);
-        }
-        assertEquals(scenario.game.getStack().size(), 3);
-        for (int seat = 0; seat < 4; seat++) {
+            // Keep the shared board's identities/counts; only substitute unique test
+            // print metadata so the leak scanner cannot match a public printing.
+            for (ZoneType zone : List.of(ZoneType.Hand, ZoneType.Battlefield)) {
+                for (Card original : new ArrayList<>(scenario.player(seat).getCardsIn(zone))) {
+                    if (zone == ZoneType.Battlefield && !original.isFaceDown()) continue;
+                    scenario.player(seat).getZone(zone).remove(original);
+                    Card marked = scenario.addCardToZone(original.getPaperCard().getName(), seat, zone);
+                    marked.setSickness(original.hasSickness());
+                    if (original.isFaceDown()) assertTrue(marked.turnFaceDown());
+                }
+            }
             Player player = scenario.player(seat);
-            assertTrue(player.getCardsIn(ZoneType.Battlefield).size() >= 25);
+            assertEquals(player.getCardsIn(ZoneType.Battlefield).size(), 33);
             assertEquals(player.getCardsIn(ZoneType.Hand).size(), 7);
             assertEquals(player.getCommanders().size(), 1);
             assertTrue(player.getCardsIn(ZoneType.Battlefield).stream().anyMatch(Card::isToken));
-            assertEquals(find(player, "Rancor").getEntityAttachedTo(), find(player, "Colossal Dreadmaw"));
-            assertEquals(find(player, "Sword of the Animist").getEntityAttachedTo(), find(player, "Colossal Dreadmaw"));
+            Card anchor = player.getCardsIn(ZoneType.Battlefield).stream().filter(c -> c.getName().equals("Colossal Dreadmaw")).findFirst().orElseThrow();
+            for (String name : List.of("Rancor", "Sword of the Animist"))
+                assertEquals(player.getCardsIn(ZoneType.Battlefield).stream().filter(c -> c.getName().equals(name)).findFirst().orElseThrow().getEntityAttachedTo(), anchor);
         }
+        assertEquals(scenario.game.getStack().size(), 3);
         return scenario;
     }
-
-    private static Card find(Player player, String name) {
-        return player.getCardsIn(ZoneType.Battlefield).stream().filter(card -> card.getName().equals(name)).findFirst().orElseThrow();
-    }
-
     // Even a missed budget must finish collecting/reporting all samples: the production
     // dynamic scan can take 1.5 seconds, up to 1,500 seconds across 1,000 passes.
     @Test(timeOut = 1_800_000)
