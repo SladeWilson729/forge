@@ -29,6 +29,9 @@ public class PuzzleStartTest {
     @Test(timeOut = 60_000) public void exportedPuzzleMatchesLoadBoardForEverySeat() throws Exception {
         ScenarioGame manual = new ScenarioGame(), load = new ScenarioGame();
         FutureTask<Void> setup = new FutureTask<>(() -> {
+            // Reproduce the turn-1 view already published by a started game.
+            manual.game.updateTurnForView();
+            assertEquals(manual.game.getView().getTurn(), 1);
             ArenaPuzzle.read(Path.of("tools/puzzles/late-game-4p.pzl")).apply(manual.game);
             LoadTest.loadPuzzle(load);
             for (int seat = 0; seat < 4; seat++) {
@@ -43,12 +46,16 @@ public class PuzzleStartTest {
                 assertEquals(player.getCardsIn(ZoneType.Battlefield).stream().filter(Card::isToken).count(), 4L);
             }
             assertEquals(manual.game.getPhaseHandler().getTurn(), 21);
+            assertEquals(manual.game.getView().getTurn(), 21, "Puzzle turn reaches the tracked view");
             assertEquals(manual.game.getPhaseHandler().getPhase(), PhaseType.COMBAT_DECLARE_BLOCKERS);
             assertEquals(manual.game.getStack().size(), 3);
             assertEquals(manual.game.getCombat().getAttackers().size(), 2);
             assertEquals(manual.game.getCombat().getAllBlockers().size(), 2);
             JsonObject[] expected = load.snapshots(), actual = manual.snapshots();
-            for (int seat = 0; seat < 4; seat++) assertEquals(normalize(actual[seat]), normalize(expected[seat]), "Seat " + seat + " shared board");
+            for (int seat = 0; seat < 4; seat++) {
+                assertEquals(actual[seat].get("turn").getAsInt(), 21, "Seat " + seat + " receives the puzzle turn");
+                assertEquals(normalize(actual[seat]), normalize(expected[seat]), "Seat " + seat + " shared board");
+            }
             return null;
         });
         manual.game.getAction().invoke(setup); setup.get(45, TimeUnit.SECONDS);

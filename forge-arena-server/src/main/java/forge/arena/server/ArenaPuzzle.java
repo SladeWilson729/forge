@@ -59,6 +59,9 @@ public final class ArenaPuzzle {
             card = game.getAction().moveToStack(card, ability); ability.setHostCard(card); game.getStack().add(ability);
         }
         if (game.getCombat() != null) game.updateCombatForView();
+        // GameState/devModeSet changes PhaseHandler.turn without refreshing the
+        // tracked view. A real start already cached turn 1 before the puzzle hook.
+        game.updateTurnForView();
     }
     private static Card card(List<Player> players, String seat, String name) {
         return players.get(Integer.parseInt(seat)).getCardsIn(ZoneType.Battlefield).stream()
