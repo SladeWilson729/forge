@@ -1,0 +1,1 @@
+{"type":"prompt","seq":130,"requestId":306,"title":"shield","min":0,"max":0,"kind":"assignGeneric","amount":3,"atLeastOne":false,"capacities":[3,3],"options":[{"optionId":0,"label":"Prompt Human 0"},{"optionId":1,"cardRef":439,"name":"Grizzly Bears","set":"SLZ","label":"Grizzly Bears","num":"77"}],"sourceCardId":419,"default":[{"optionId":0,"amount":3},{"optionId":1,"amount":0}]}

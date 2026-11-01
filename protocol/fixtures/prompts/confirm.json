@@ -1,0 +1,1 @@
+{"type":"prompt","seq":127,"requestId":303,"title":"Confirm","min":0,"max":0,"kind":"confirm","text":"Fixture optional action?","options":[{"optionId":0,"label":"Yes"},{"optionId":1,"label":"No"}],"sourceCardId":405,"default":true}

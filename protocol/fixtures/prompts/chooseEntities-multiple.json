@@ -1,0 +1,1 @@
+{"type":"prompt","seq":121,"requestId":296,"title":"Fixture multiple library choices","min":1,"max":2,"kind":"chooseEntities","single":false,"options":[{"optionId":0,"cardRef":"h-3bb070fedb47","name":"Plains","set":"MDD","label":"Plains","num":"292"},{"optionId":1,"cardRef":"h-116c6e510257","name":"Island","set":"MDD","label":"Island","num":"294"}],"default":[0]}

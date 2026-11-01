@@ -1,0 +1,1 @@
+{"type":"prompt","seq":190,"requestId":370,"title":"Choose ability","min":1,"max":1,"kind":"chooseAbility","options":[{"optionId":0,"label":"{3}{G}: Create a 1/1 green Saproling creature token."},{"optionId":1,"label":"{3}{W}: Creatures you control get +1/+1 until end of turn."}],"sourceCardId":422,"default":0}

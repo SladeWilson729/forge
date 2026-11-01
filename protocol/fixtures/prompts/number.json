@@ -1,0 +1,1 @@
+{"type":"prompt","seq":129,"requestId":305,"title":"Fixture integer","min":0,"max":0,"kind":"number","text":"Enter a number greater than or equal to 0:","initialInput":"","restrictedInput":false,"options":[],"default":null}
