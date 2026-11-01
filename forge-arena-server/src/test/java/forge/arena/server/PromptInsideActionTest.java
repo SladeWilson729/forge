@@ -49,26 +49,12 @@ public class PromptInsideActionTest {
             action.get(10, TimeUnit.SECONDS);
             assertTrue(System.nanoTime() - started < TimeUnit.SECONDS.toNanos(10), "Prompt-inside-action completed within 10 s");
             assertTrue(h.remote.getLastReplyThread().startsWith("nioEventLoopGroup-"));
-            // PlaySpellAbility.chooseOptionalAdditionalCosts asks again, on the game worker,
-            // even when the only variant is the already-selected 3W PumpAll ability. The old
-            // replacement client had no handler and silently left THIS second request pending.
-            JsonObject additionalCost = next(reconnected, "prompt");
-            assertNotEquals(additionalCost.get("requestId"), prompt.get("requestId"));
-            assertEquals(additionalCost.get("kind").getAsString(), "chooseAbility");
-            assertEquals(additionalCost.getAsJsonArray("options").size(), 1);
-            assertTrue(additionalCost.getAsJsonArray("options").get(0).getAsJsonObject()
-                    .get("label").getAsString().contains("+1/+1"));
-            PromptGameHarness.edt(() -> {
-                h.traceState("after initial reply, additional-cost reply pending");
-                assertNull(h.human.getInputQueue().getInput());
-                assertTrue(h.game.getStack().isEmpty());
-                return null;
-            });
-            PromptGameHarness.dumpThreads("additional-cost prompt deliberately pending on replacement client");
-            h.answer = p -> p.get("default");
-            reconnected.send(PromptAssertions.reply(additionalCost, new JsonPrimitive(0)));
+            // The selected 3W PumpAll variant is the only additional-cost choice.
+            // Like CMatchUI, the seat GUI returns it directly: no second socket prompt.
             h.waitInput(InputPayMana.class);
-            PromptGameHarness.edt(() -> { h.traceState("additional-cost reply completed, paying 3W"); return null; });
+            assertEquals(h.prompts.stream().map(p -> p.get("requestId")).distinct().count(), 1L,
+                    "Only the two-ability choice (and its reconnect replay) contacts the client");
+            PromptGameHarness.edt(() -> { h.traceState("single cost variant selected directly, paying 3W"); return null; });
             h.action(h.controller::selectButtonOk); // Forge autopays the selected ability's 3W cost.
             h.waitInput(InputPassPriority.class);
             PromptGameHarness.edt(() -> {
@@ -79,6 +65,44 @@ public class PromptInsideActionTest {
             });
             h.healthy();
         }
+    }
+
+    @Test(timeOut = 120_000)
+    public void landSpellAndSingleManaAbilityPlayWithoutAbilityPrompts() throws Exception {
+        try (PromptGameHarness h = new PromptGameHarness(true)) {
+            h.start("Mountain", "Mountain;Shock");
+            int land = PromptGameHarness.edt(() -> h.card("Mountain", ZoneType.Hand).getId());
+            int source = PromptGameHarness.edt(() -> h.card("Mountain", ZoneType.Battlefield).getId());
+            int shock = PromptGameHarness.edt(() -> h.card("Shock", ZoneType.Hand).getId());
+            int defender = PromptGameHarness.edt(() -> h.game.getPlayers().get(1).getId());
+            h.waitClientKind("priority");
+            h.sendAction("selectCard", "cardId", new JsonPrimitive(land));
+            h.until(() -> h.game.findById(land).isInZone(ZoneType.Battlefield), "Mountain played");
+            h.waitClientKind("priority");
+            assertNoAbilityPrompt(h);
+
+            h.sendAction("selectCard", "cardId", new JsonPrimitive(shock));
+            h.waitClientKind("target");
+            assertNoAbilityPrompt(h);
+            h.sendAction("selectPlayer", "playerId", new JsonPrimitive(defender));
+            h.waitClientKind("payMana");
+            assertNoAbilityPrompt(h); // Includes the Game-worker optional-cost singleton.
+            h.sendAction("selectCard", "cardId", new JsonPrimitive(source));
+            h.waitClientKind("priority");
+            PromptGameHarness.edt(() -> {
+                assertTrue(h.game.findById(source).isTapped());
+                assertEquals(h.game.getStack().peekAbility().getApi(), ApiType.DealDamage);
+                assertEquals(h.game.getStack().peekAbility().getHostCard().getName(), "Shock");
+                return null;
+            });
+            assertNoAbilityPrompt(h); // InputPayMana's single mana ability bypasses the GUI too.
+            h.healthy();
+        }
+    }
+
+    private static void assertNoAbilityPrompt(PromptGameHarness h) {
+        assertTrue(h.prompts.stream().noneMatch(p -> "chooseAbility".equals(p.get("kind").getAsString())),
+                "Land, single spell/cost variant and single mana source must not open chooseAbility");
     }
 
     static JsonObject next(WsTestClient client, String type) throws Exception {
