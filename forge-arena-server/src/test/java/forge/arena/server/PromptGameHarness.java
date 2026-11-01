@@ -57,6 +57,7 @@ final class PromptGameHarness implements AutoCloseable {
     private volatile boolean handSettled;
     private volatile int ownerId;
     java.util.function.Consumer<Game> extraSetup = g -> { };
+    java.util.function.Consumer<JsonObject> stateObserver = state -> { };
     java.util.function.Consumer<List<String>> scenarioLines = lines -> { };
     private long clientSequence;
     private volatile JsonObject receivedState;
@@ -130,7 +131,7 @@ final class PromptGameHarness implements AutoCloseable {
                         }
                     }
                     JsonObject state = remote.getLatestState();
-                    if (state != null) PromptAssertions.validate(state, "state");
+                    if (state != null) { PromptAssertions.validate(state, "state"); stateObserver.accept(state); }
                 } catch (Throwable ex) { failure.compareAndSet(null, ex); }
             }
             public Object sendAndWait(IdentifiableNetEvent event) {

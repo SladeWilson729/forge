@@ -684,6 +684,14 @@
         "manaPoolOpen": {
           "type": "boolean"
         },
+        "remainingCost": {
+          "type": "string",
+          "$comment": "Task 2.7-prep, payMana only. InputPayManaOfCostPayment.java:36-37 stores the input's protected manaCost on Player.getPaidForSA().getManaCostBeingPaid(). ManaCostBeingPaid.toString():663-664 emits unannounced X, generic then sorted brace-wrapped shards; its paid value 0 is normalized to the empty string. Copied only on a Forge-safe display caller; timer displays reuse the copy."
+        },
+        "xCost": {
+          "type": "boolean",
+          "$comment": "Task 2.7-prep, payMana only. ManaCostBeingPaid.getXcounter():687-688 > 0 means unannounced X remains; setXManaCostPaid():240-242 clears the counter when X is announced. This does not mean that an already-announced cost originally contained X."
+        },
         "offered": {
           "type": "array",
           "items": {

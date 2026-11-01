@@ -8,12 +8,14 @@ import forge.arena.server.prompt.PromptCodec;
 import forge.deck.CardPool;
 import forge.game.Game;
 import forge.game.GameEntityView;
+import forge.game.mana.ManaCostBeingPaid;
 import forge.game.player.PlayerView;
 import forge.game.player.RegisteredPlayer;
 import forge.gamemodes.match.HostedMatch;
 import forge.gamemodes.match.input.Input;
 import forge.gamemodes.match.input.InputAttack;
 import forge.gamemodes.match.input.InputPassPriority;
+import forge.gamemodes.match.input.InputPayMana;
 import forge.gamemodes.net.DeltaPacket;
 import forge.gamemodes.net.IRemote;
 import forge.gamemodes.net.event.GuiGameEvent;
@@ -288,6 +290,7 @@ public final class JsonSeatRemote implements IRemote {
     private void display(final GuiGameEvent event) {
         displayCalls.incrementAndGet();
         String kind = null;
+        ActiveInputTracker.Payment payment = null;
         final List<TrackableObject> defenders = new ArrayList<>();
         // This is deliberately narrower than snapshot(): only display calls inspect InputQueue.
         // A timer's bare showPromptMessage must never inspect the live game or combat.
@@ -296,6 +299,19 @@ public final class JsonSeatRemote implements IRemote {
             if (game != null && seat != null
                     && game.getPlayer(seat).getController() instanceof PlayerControllerHuman human) {
                 input = human.getInputQueue().getInput();
+                if (input instanceof InputPayMana) {
+                    // InputPayMana.manaCost is protected. Its concrete subclass publishes
+                    // that SAME object through the payer's current paid-for ability (ctor
+                    // InputPayManaOfCostPayment). Read only here, on the safe display caller,
+                    // before taking any bridge bookkeeping lock. onStop clears this public
+                    // link before removing the Input; retain the last copy during teardown.
+                    final var ability = human.getPlayer().getPaidForSA();
+                    final ManaCostBeingPaid cost = ability == null ? null : ability.getManaCostBeingPaid();
+                    if (cost != null) {
+                        final String remaining = cost.toString(); // Shards, not localized prompt text.
+                        payment = new ActiveInputTracker.Payment("0".equals(remaining) ? "" : remaining, cost.getXcounter() > 0);
+                    }
+                }
             }
             kind = inputTracker.classify(input);
             if (input instanceof InputAttack && game.getCombat() != null) {
@@ -309,7 +325,7 @@ public final class JsonSeatRemote implements IRemote {
                         event.getMethod(), thread);
             }
         }
-        inputTracker.display(event, kind, defenders);
+        inputTracker.display(event, kind, defenders, payment);
         // A selection/highlight push alone is not a visible decision. In particular
         // InputPassPriority can stop itself for a yield before showing any buttons.
         if (kind != null) writer.clockInput(inputTracker.decisionDisplayed());

@@ -21,6 +21,8 @@ import java.util.function.Consumer;
 
 /** Per-seat display bookkeeping. Retains copied values, never an Input or a live game graph. */
 public final class ActiveInputTracker {
+    /** Detached payment data copied by JsonSeatRemote on the Forge-safe display caller. */
+    public record Payment(String remainingCost, boolean xCost) { }
     private static final System.Logger LOG = System.getLogger(ActiveInputTracker.class.getName());
     // Specific classes precede their bases for the subclass pass (notably cards vs entities).
     private static final Map<Class<? extends Input>, String> KINDS = new LinkedHashMap<>();
@@ -87,10 +89,19 @@ public final class ActiveInputTracker {
      */
     public void display(final GuiGameEvent event, final String kind,
                         final List<? extends TrackableObject> defenders) {
+        display(event, kind, defenders, null);
+    }
+
+    public void display(final GuiGameEvent event, final String kind,
+                        final List<? extends TrackableObject> defenders, final Payment payment) {
         final JsonObject update = new JsonObject();
         if (kind != null) {
             update.addProperty("kind", kind);
             if ("declareAttackers".equals(kind)) update.add("attackTargets", entities(defenders));
+            if ("payMana".equals(kind) && payment != null) {
+                update.addProperty("remainingCost", payment.remainingCost());
+                update.addProperty("xCost", payment.xCost());
+            }
         }
         final Object[] args = event.getObjects();
         switch (event.getMethod()) {
@@ -145,6 +156,9 @@ public final class ActiveInputTracker {
             else if (kind != null && (event.getMethod() == forge.gamemodes.net.ProtocolMethod.showPromptMessage
                     || event.getMethod() == forge.gamemodes.net.ProtocolMethod.updateButtons)) decisionDisplayed = true;
             update.entrySet().forEach(entry -> values.add(entry.getKey(), entry.getValue()));
+            if (kind != null && !"payMana".equals(values.get("kind").getAsString())) {
+                values.remove("remainingCost"); values.remove("xCost");
+            }
         }
     }
 
@@ -178,6 +192,7 @@ public final class ActiveInputTracker {
             return waiting;
         }
         if (!"declareAttackers".equals(kind)) result.remove("attackTargets");
+        if (!"payMana".equals(kind)) { result.remove("remainingCost"); result.remove("xCost"); }
         if (result.has("sourceCardId")) {
             final JsonElement source = result.remove("sourceCardId");
             if (!source.isJsonNull()) {

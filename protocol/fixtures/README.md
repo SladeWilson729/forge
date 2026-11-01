@@ -79,7 +79,7 @@ setSelection updates.
 | [inputs/declareAttackers.json](inputs/declareAttackers.json) | 1.4a combat, two creatures and three opponents; attackTargets and chosen defender. |
 | [inputs/declareBlockers.json](inputs/declareBlockers.json) | 1.4a combat, opposing Dreadmaws attacking seat 0; chosen attacker and blockers. |
 | [inputs/target.json](inputs/target.json) | Human `chooseTargetsFor` using Shock's script; waits for this socket state before selectPlayer answers (the faster 1.4a targeting display can be coalesced away). |
-| [inputs/payMana.json](inputs/payMana.json) | 1.4a manual payment with Forests/Birds; manaPoolOpen and strength-2 auto-tap preview. |
+| [inputs/payMana.json](inputs/payMana.json) | 1.4a manual payment with Forests/Birds; manaPoolOpen, strength-2 auto-tap preview, and structured remainingCost/xCost (task 2.7-prep). remainingCost uses Forge's brace notation; no English parsing is needed. |
 | [inputs/selectCards.json](inputs/selectCards.json) | Human `choosePermanentsToSacrifice` from two live bears; InputSelectCardsFromList, selectCard answers. Probe selects but does not itself sacrifice. |
 | [inputs/selectEntities.json](inputs/selectEntities.json) | Human `chooseSingleEntityForEffect` among live players (or the game's starting-player choice); selectPlayer answers. |
 | [inputs/convoke.json](inputs/convoke.json) | Human `chooseCardsForConvokeOrImprovise` for Sprout Swarm's real cost with two live bears; OK elects to convoke zero creatures. |

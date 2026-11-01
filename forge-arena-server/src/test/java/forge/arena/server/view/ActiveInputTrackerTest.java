@@ -93,4 +93,26 @@ public class ActiveInputTrackerTest {
                 SchemaLocation.of(Path.of("../protocol/schema.json").toAbsolutePath().normalize().toUri() + "#/$defs/ActiveInput"));
         assertTrue(schema.validate(input.toString(), InputFormat.JSON).isEmpty(), input.toString());
     }
+
+    @Test
+    public void paymentCopiesSurviveTimerDisplaysAndClearWhenTheInputChanges() {
+        ActiveInputTracker tracker = new ActiveInputTracker(); IdMapper ids = new IdMapper();
+        GuiGameEvent buttons = new GuiGameEvent(ProtocolMethod.updateButtons, null, "Auto", "Cancel", true, true, true);
+        tracker.display(buttons, "payMana", List.of(), new ActiveInputTracker.Payment("{2}{U}{G}", false));
+        assertEquals(tracker.toJson(ids).get("remainingCost").getAsString(), "{2}{U}{G}");
+        tracker.display(new GuiGameEvent(ProtocolMethod.showPromptMessage, null, "Timer text is not a cost", null), null, List.of());
+        assertEquals(tracker.toJson(ids).get("remainingCost").getAsString(), "{2}{U}{G}");
+        assertFalse(tracker.toJson(ids).get("xCost").getAsBoolean()); validate(tracker.toJson(ids));
+        tracker.display(buttons, "payMana", List.of(), new ActiveInputTracker.Payment("{X}{G}", true));
+        assertTrue(tracker.toJson(ids).get("xCost").getAsBoolean());
+        tracker.display(buttons, "payMana", List.of(), new ActiveInputTracker.Payment("", false));
+        assertEquals(tracker.toJson(ids).get("remainingCost").getAsString(), ""); validate(tracker.toJson(ids));
+        tracker.display(buttons, "priority", List.of());
+        assertFalse(tracker.toJson(ids).has("remainingCost")); assertFalse(tracker.toJson(ids).has("xCost"));
+        tracker.display(buttons, "payMana", List.of(), new ActiveInputTracker.Payment("{C}", false));
+        tracker.display(new GuiGameEvent(ProtocolMethod.awaitNextInput), "payMana", List.of());
+        assertEquals(tracker.toJson(ids).toString(), "{\"kind\":\"waiting\"}");
+        tracker.display(buttons, "priority", List.of());
+        assertFalse(tracker.toJson(ids).has("remainingCost")); assertFalse(tracker.toJson(ids).has("xCost"));
+    }
 }

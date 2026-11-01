@@ -353,13 +353,35 @@ The state envelope flattens StateSnapshot alongside type/seq, matching section 3
 | HiddenCard | `id`: string; `hidden`: const `true` |
 | FaceDownCard | `id`: `CardRef`; `types?`: string; `tapped?`: boolean; `sick?`: boolean; `power?`: `Int32`; `toughness?`: `Int32`; `damage?`: `Int32`; `counters?`: `Counters`; `attachedTo?`: `EntityRef` or null; `attacking?`: boolean; `blocking?`: boolean; `attackTarget?`: `EntityRef` or null; `faceDown`: const `true`; `controllerId?`: `PlayerRef`; `ownerId?`: `PlayerRef`; `token?`: boolean; `isCommander?`: boolean; `blockingIds?`: array of `CardRef` |
 | StackItem | `stackId`: `Int32`; `sourceCardId`: `CardRef`; `controllerId`: `PlayerRef`; `text`: string; `targets`: array of `EntityRef` |
-| ActiveInput | `kind`: enum (see below); `prompt?`: string; `sourceCardId?`: `CardRef`; `manaPoolOpen?`: boolean; `okLabel?`: string; `cancelLabel?`: string; `buttons?`: object; `highlighted?`: array of object; `chosen?`: array of `EntityRef`; `attackTargets?`: array of `EntityRef`; `min?`: `Int32`; `max?`: `Int32`; `selectable?`: array of `CardRef`; `targets?`: array of `EntityRef`; `offered?`: array of `InputCardOffer` |
+| ActiveInput | `kind`: enum (see below); `prompt?`: string; `sourceCardId?`: `CardRef`; `manaPoolOpen?`: boolean; `remainingCost?`: string (payMana only); `xCost?`: boolean (payMana only); `okLabel?`: string; `cancelLabel?`: string; `buttons?`: object; `highlighted?`: array of object; `chosen?`: array of `EntityRef`; `attackTargets?`: array of `EntityRef`; `min?`: `Int32`; `max?`: `Int32`; `selectable?`: array of `CardRef`; `targets?`: array of `EntityRef`; `offered?`: array of `InputCardOffer` |
 | InputCardOffer | `cardRef`: `CardRef`; `label`: string; `name?`: string; `set?`: string; `num?`: string |
 | SeatClock | `seat`: integer 0..3; `remainingMs`: integer >= 0; `running`: boolean |
 
 Task 1.10: `hello.playerId` is the controlled Forge player id resolved from the seat's RegisteredPlayer, never the seat index (HostedMatch sorts humans first). Startup connections wait for that binding; the browser has no player selector. `types` uses CardStateView.getType().toString() (CardView.java:1361; CardType.java:609), with the same identity gating as name. VisibleCard may use an authorized alternate identity; FaceDownCard uses only the public current face, never the hidden alternate, and HiddenCard has no types. ArenaServerMain enables UI_SHOW_ACTIONABLE_HIGHLIGHTS. Combat declarations appear only for highlighted cards; type text is not a legality check. Forge drops declared attackers from highlights, so they retain a Remove attacker button.
 
 ActiveInput.buttons is `{ok:{enabled:boolean},cancel:{enabled:boolean}}`; highlighted is `[{id:CardRef,strength:1 or 2}]`. Chosen, attackTargets and targets use tagged EntityRef objects, as do stack.targets, defenderId, attachedTo and attackTarget. These replace the original playerId/planeswalkerId forms. E7 is decided in task 1.5. Waiting carries only kind, suppressing stale actions; other kinds derive their available fields from Selection, updateButtons, showPromptMessage and highlight calls. sourceCardId is the prompt card; manaPoolOpen records showManaPool/hideManaPool (initially false). Optional fields appear once Forge supplies them. attackTargets appears only during declareAttackers and includes every live Combat defender. Button owner is implicit in the receiving seat; focus is a local UI hint.
+
+Task 2.7-prep: `payMana` displays also carry `remainingCost` and `xCost`. Neither field
+is carried by other kinds. `remainingCost` is `ManaCostBeingPaid.toString()` with
+only its paid value `"0"` changed to `""`; it is never extracted from the English
+prompt. The exact format is concatenated brace-wrapped Forge mana symbols, with
+unannounced `{X}` first, generic mana next, then repeated shards sorted in
+ManaCostShard declaration order (W, U, B, R, G, C, then hybrids and other shards).
+There are no spaces: Horizon Chimera's `2 G U` is `"{2}{U}{G}"`, Dimir Guildmage's
+hybrid cost is `"{U/B}{U/B}"`, and Thought-Knot Seer is `"{3}{C}"`. Forge renders
+generic values above 20 as one symbol per decimal digit (21 becomes `"{2}{1}"`);
+the wire preserves that formatter behavior rather than introducing a second notation.
+`xCost` is true only while `getXcounter() > 0`; announcing X via setXManaCostPaid
+clears it, so an ordinary already-announced X spell has xCost=false.
+
+InputPayMana's manaCost field is protected and has no public getter. The sole
+concrete subclass, InputPayManaOfCostPayment, publishes the same object through
+Player.getPaidForSA().getManaCostBeingPaid() in its constructor (lines 36-37), and
+clears it during onStop. JsonSeatRemote copies its formatted string and X flag only
+inside the existing Forge-safe display capture, before any bridge lock. The tracker
+retains only those primitive copies; unexpected-thread timer displays and the final
+teardown calls reuse them, and leaving payMana clears them. A paid empty-cost display
+can be transient and coalesced into the next priority/waiting state.
 
 Task 1.7 adds `offered` for Input selections and source cards absent from snapshots. `PlayerControllerHuman.useSelectCardsInput` supports Library when `UI_SELECT_FROM_CARD_DISPLAYS` is enabled; `InputSelectEntitiesFromList.getSelection` supplies those CardViews. Library snapshots remain count-only. Input offers use the corrected E5 prompt identity policy: face-up cards are revealed to the receiving seat; face-down identity requires `CardVisibility.forSeat`, otherwise the label is "Face-down card" and name/set/num are absent. An existing seat ref is reused when safe, otherwise a random opaque Input-scoped ref is issued. Offers retire when the selection ends; only currently selectable opaque references authorize actions (a source-card tooltip is not selection permission).
 
