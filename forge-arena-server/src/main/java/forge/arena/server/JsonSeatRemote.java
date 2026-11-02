@@ -58,6 +58,15 @@ public final class JsonSeatRemote implements IRemote {
 
     void attachGui(forge.gamemodes.net.ProtocolGuiGame gui) { protocolGui = gui; }
 
+    /** Game worker only, while the priority holder is parked. No Input is released here. */
+    void refreshGameView(Game expected) {
+        if (game != expected) return;
+        var gui = protocolGui;
+        if (gui == null && seat != null && game.getPlayer(seat).getController() instanceof PlayerControllerHuman human
+                && human.getGui() instanceof forge.gamemodes.net.ProtocolGuiGame humanGui) gui = humanGui;
+        if (gui != null) gui.updateGameView();
+    }
+
     void requestFullResync() {
         FThreads.invokeInEdtLater(() -> {
             var gui = protocolGui;

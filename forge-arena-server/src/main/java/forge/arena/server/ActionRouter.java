@@ -82,7 +82,7 @@ final class ActionRouter {
                 return;
             }
             require(humanSeat, "This seat is not yours to play");
-            require(!remote.hasPendingPrompt(), "Answer the pending prompt first");
+            require(type.equals("concede") || !remote.hasPendingPrompt(), "Answer the pending prompt first");
             JsonObject state = remote.getLatestState();
             require(state != null, "The game is not ready");
             JsonObject input = state.getAsJsonObject("activeInput");
@@ -140,7 +140,18 @@ final class ActionRouter {
             require(game.isGameOver(), "The game has not ended"); controller.nextGameDecision(nextGame(m.get("decision").getAsString())); return;
         }
         require(!game.isGameOver(), "The game has ended");
-        if (type.equals("concede")) { controller.concede(); return; }
+        if (type.equals("concede")) {
+            // Concession does not need this seat's Input. GameAction.invoke runs on
+            // a Game worker while the priority holder is parked, just like UI game work.
+            game.getAction().invoke(() -> {
+                controller.concede(); // Forge's outcome + multiplayer cleanup/game-over path.
+                // There may be no new priority/Input for any seat yet. Flush the
+                // buffered removal now, without answering another player's decision.
+                writer.refreshGameViews(game);
+                controller.getInputQueue().clearInputs();
+            });
+            return;
+        }
         require(!remote.hasPendingPrompt(), "Answer the pending prompt first");
         String kind = classifier.classify(controller.getInputQueue().getInput());
         require(!kind.equals("waiting"), "The game is busy; try again");

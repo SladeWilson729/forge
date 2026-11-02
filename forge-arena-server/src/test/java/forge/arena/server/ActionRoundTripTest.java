@@ -19,6 +19,73 @@ import static org.testng.Assert.*;
 public class ActionRoundTripTest {
     @BeforeClass public void initialize() { PromptGameHarness.initialize(); }
 
+    @Test(timeOut = 90_000)
+    public void offTurnConcessionEliminatesWithoutAdvancingThePriorityInput() throws Exception {
+        try (PromptGameHarness h = new PromptGameHarness(true, 0, 1, false);
+             WsTestClient bot2 = new WsTestClient(); WsTestClient bot3 = new WsTestClient()) {
+            h.start("Grizzly Bears", "Forest");
+            h.waitClientKind("priority");
+            h.until(() -> h.secondaryHuman.getInputQueue().getInput() == null && h.secondaryState != null
+                    && h.secondaryState.getAsJsonObject("activeInput").get("kind").getAsString().equals("waiting"), "Seat 1 has no Input");
+            bot2.connect(HttpClient.newHttpClient(), h.server.getPort(), "/ws?seat=2"); bot2.hello(2);
+            bot3.connect(HttpClient.newHttpClient(), h.server.getPort(), "/ws?seat=3"); bot3.hello(3);
+            List<WsTestClient> clients = List.of(h.client, h.secondaryClient, bot2, bot3);
+            h.until(() -> clients.stream().allMatch(c -> latestState(c) != null)
+                    && h.clientState().get("seq").getAsLong() == h.remote.getLastStateSequence()
+                    && h.secondaryState.get("seq").getAsLong() == h.secondaryRemote.getLastStateSequence(), "Settled wire states");
+            Map<WsTestClient, Long> before = new HashMap<>();
+            clients.forEach(c -> before.put(c, latestState(c).get("seq").getAsLong()));
+            Input held = PromptGameHarness.edt(() -> h.human.getInputQueue().getInput());
+            int loser = PromptGameHarness.edt(() -> h.secondaryHuman.getPlayer().getId());
+            AtomicReference<String> buildThread = new AtomicReference<>();
+            h.remote.setSnapshotBuiltObserver(state -> {
+                if (eliminated(state, loser)) buildThread.compareAndSet(null, Thread.currentThread().getName());
+            });
+
+            h.secondaryAction("concede"); // No action whatsoever from seat 0 before the assertions below.
+            h.until(() -> clients.stream().allMatch(c -> eliminated(latestState(c), loser)), "Concession on all four wires without further input");
+            assertNotNull(buildThread.get()); assertTrue(buildThread.get().startsWith("Game-"), buildThread.get());
+            for (WsTestClient client : clients) {
+                JsonObject next = client.history().stream().map(WsTestClient.Received::object)
+                        .filter(m -> m.get("type").getAsString().equals("state") && m.get("seq").getAsLong() > before.get(client))
+                        .findFirst().orElseThrow();
+                PromptAssertions.validate(next, "state"); assertTrue(eliminated(next, loser), "Next state contains the elimination");
+            }
+            PromptGameHarness.edt(() -> {
+                assertSame(h.human.getInputQueue().getInput(), held, "Seat 0 never passed its held priority");
+                assertSame(h.game.getPhaseHandler().getPriorityPlayer(), h.human.getPlayer());
+                assertTrue(h.secondaryHuman.getPlayer().conceded());
+                assertFalse(h.game.getPlayers().contains(h.secondaryHuman.getPlayer()));
+                assertEquals(h.game.getPlayers().size(), 3); assertFalse(h.game.isGameOver()); return null;
+            });
+            int forest = PromptGameHarness.edt(() -> h.card("Forest", ZoneType.Hand).getId());
+            long continuedAfter = h.clientState().get("seq").getAsLong();
+            h.sendAction("selectCard", "cardId", new JsonPrimitive(forest));
+            h.until(() -> h.game.findById(forest).isInZone(ZoneType.Battlefield)
+                    && h.clientState().get("seq").getAsLong() > continuedAfter, "Remaining player can play a land");
+            h.healthy();
+            System.out.println("[concede] seat=1 heldPriority=0 remaining=3 snapshotThread=" + buildThread.get());
+        }
+    }
+
+    private static JsonObject latestState(WsTestClient client) {
+        JsonObject latest = null;
+        for (var item : client.history()) {
+            JsonObject message = item.object();
+            if (message.get("type").getAsString().equals("state")) latest = message;
+        }
+        return latest;
+    }
+
+    private static boolean eliminated(JsonObject state, int id) {
+        if (state == null) return false;
+        for (JsonElement value : state.getAsJsonArray("players")) {
+            JsonObject player = value.getAsJsonObject();
+            if (player.get("id").getAsInt() == id) return player.get("eliminated").getAsBoolean();
+        }
+        return false;
+    }
+
     @Test(timeOut = 180_000)
     public void socketActionsPlayPayAndDeclareAcrossFourDefenders() throws Exception {
         try (PromptGameHarness h = new PromptGameHarness(true); WsTestClient bot = new WsTestClient()) {

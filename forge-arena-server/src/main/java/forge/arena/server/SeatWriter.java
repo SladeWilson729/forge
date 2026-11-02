@@ -69,6 +69,12 @@ public final class SeatWriter implements AutoCloseable {
     boolean connected() { Channel current = channel; return current != null && current.isActive(); }
     long disconnectedAtNanos() { return disconnectedAtNanos; }
     JsonSeatRemote remote() { return remote; }
+    private java.util.function.Consumer<forge.game.Game> gameViewRefresh = game -> {
+        if (remote != null) remote.refreshGameView(game);
+    };
+    void setGameViewRefresh(java.util.function.Consumer<forge.game.Game> refresh) { gameViewRefresh = refresh; }
+    /** Caller stays on its Game worker; never enqueue live Forge reads on this writer. */
+    void refreshGameViews(forge.game.Game game) { gameViewRefresh.accept(game); }
     private final java.util.Set<Channel> awaitingJoin = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
     private String seatToken;
 

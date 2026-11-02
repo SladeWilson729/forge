@@ -58,6 +58,12 @@ public final class WsServer implements AutoCloseable {
         final java.util.concurrent.ConcurrentMap<Integer, SeatWriter.GameStart> gameStarts = new java.util.concurrent.ConcurrentHashMap<>();
         for (int seat = 0; seat < writers.length; seat++) {
             writers[seat] = new SeatWriter(seat, gameStarts, clock, bandwidth);
+            writers[seat].setGameViewRefresh(game -> {
+                for (SeatWriter writer : writers) {
+                    JsonSeatRemote remote = writer == null ? null : writer.remote();
+                    if (remote != null) remote.refreshGameView(game);
+                }
+            });
         }
     }
 
