@@ -1,0 +1,40 @@
+# Forge Arena smoke: Trample, two blockers, planeswalker defender and a commander-damage kill
+# Humans: wire seats 0 and 1. Bots: 2 and 3. Restart for each checklist row.
+# #smoke-* comments are test metadata only; ArenaPuzzle ignores them.
+activeplayer=p0
+activephase=MAIN1
+turn=7
+removesummoningsickness=true
+p0life=40
+p0counters=POISON=0
+p0battlefield=Plains;Plains;Plains;Island;Island;Island;Swamp;Swamp;Mountain;Mountain;Forest;Forest;Colossal Dreadmaw|NoETBTrigs;Grizzly Bears|NoETBTrigs;Isamaru, Hound of Konda|IsCommander|Counters:P1P1=19|NoETBTrigs
+p0hand=
+p0command=
+p0library=Forest;Island;Swamp;Mountain;Plains;Grizzly Bears;Runeclaw Bear;Cultivate;Brainstorm;Preordain;Notion Rain;Fact or Fiction;Forest;Island;Plains;Swamp;Mountain;Forest;Island;Plains
+p0graveyard=
+p0exile=
+p1life=22
+p1counters=POISON=0
+p1battlefield=Plains;Plains;Island;Island;Swamp;Mountain;Forest;Forest;Grizzly Bears|NoETBTrigs;Wall of Wood|NoETBTrigs;Jace Beleren|Counters:LOYALTY=5|NoETBTrigs
+p1hand=
+p1command=Kenrith, the Returned King|IsCommander
+p1library=Forest;Island;Swamp;Mountain;Plains;Grizzly Bears;Runeclaw Bear;Cultivate;Brainstorm;Preordain;Notion Rain;Fact or Fiction;Forest;Island;Plains;Swamp;Mountain;Forest;Island;Plains
+p1graveyard=
+p1exile=
+p2life=40
+p2counters=POISON=0
+p2battlefield=Plains;Plains;Wall of Wood|NoETBTrigs
+p2hand=
+p2command=Kenrith, the Returned King|IsCommander
+p2library=Forest;Island;Swamp;Mountain;Plains;Grizzly Bears;Runeclaw Bear;Cultivate;Brainstorm;Preordain;Notion Rain;Fact or Fiction;Forest;Island;Plains;Swamp;Mountain;Forest;Island;Plains
+p2graveyard=
+p2exile=
+p3life=40
+p3counters=POISON=0
+p3battlefield=Plains;Plains;Wall of Wood|NoETBTrigs
+p3hand=
+p3command=Kenrith, the Returned King|IsCommander
+p3library=Forest;Island;Swamp;Mountain;Plains;Grizzly Bears;Runeclaw Bear;Cultivate;Brainstorm;Preordain;Notion Rain;Fact or Fiction;Forest;Island;Plains;Swamp;Mountain;Forest;Island;Plains
+p3graveyard=
+p3exile=
+#smoke-attackers=Colossal Dreadmaw;Grizzly Bears;Isamaru, Hound of Konda
