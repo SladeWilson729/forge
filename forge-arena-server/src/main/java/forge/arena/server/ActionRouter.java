@@ -21,8 +21,7 @@ import java.util.*;
 final class ActionRouter {
     private static final System.Logger LOG = System.getLogger(ActionRouter.class.getName());
     private static final ClientMessageSchema SCHEMA = new ClientMessageSchema();
-    private static final Set<String> LATER = Set.of("join", "ready", "startGame", "lobbySettings",
-            "macroRecord", "macroNext", "macroRepeat");
+    private static final Set<String> LATER = Set.of("join", "ready", "startGame", "lobbySettings");
     private static final Set<String> CARD_FIELDS = Set.of("cardId", "attackerId", "blockerId");
     private final JsonSeatRemote remote;
     private final boolean humanSeat;
@@ -41,6 +40,12 @@ final class ActionRouter {
     void accept(JsonObject message, java.util.function.Consumer<String> result) {
         try {
             require(abandonedReason == null, abandonedReason);
+            if (message.has("type") && message.get("type").getAsString().equals("macroRepeat")) {
+                try {
+                    int count = forge.arena.server.prompt.PromptCodec.integer(message.get("count"));
+                    require(count >= 1 && count <= 99, "Macro repeat count must be between 1 and 99");
+                } catch (RuntimeException ex) { throw new IllegalArgumentException("Macro repeat count must be between 1 and 99"); }
+            }
             if (message.has("type") && message.get("type").getAsString().equals("setYield")
                     && message.has("kind") && message.get("kind").getAsString().equals("pref")
                     && message.has("name") && message.has("value")) {
@@ -136,6 +141,9 @@ final class ActionRouter {
         require(player != null && player.getController() instanceof PlayerControllerHuman, "This seat is not yours to play");
         PlayerControllerHuman controller = (PlayerControllerHuman) player.getController();
         String type = m.get("type").getAsString();
+        if (type.startsWith("macro")) {
+            require(!player.hasLost(), player.conceded() ? "You conceded this game" : "The game has ended");
+        }
         if (type.equals("nextGame")) {
             require(game.isGameOver(), "The game has not ended"); controller.nextGameDecision(nextGame(m.get("decision").getAsString())); return;
         }
@@ -153,6 +161,10 @@ final class ActionRouter {
             return;
         }
         require(!remote.hasPendingPrompt(), "Answer the pending prompt first");
+        if (Set.of("macroRecord", "macroNext", "macroRepeat").contains(type)) {
+            remote.macroAction(controller, type, m.has("count") ? m.get("count").getAsInt() : 0);
+            return;
+        }
         String kind = classifier.classify(controller.getInputQueue().getInput());
         require(!kind.equals("waiting"), "The game is busy; try again");
         require(kind.equals(receivedKind), "That input is no longer active");

@@ -3982,7 +3982,7 @@
         "count"
       ],
       "additionalProperties": true,
-      "$comment": "Plan 3.2 and 3.5 E13: count is 1..99 parameterless repeat calls, stopping if a prompt opens. Finished in task 1.4."
+      "$comment": "Task 2.13: count is 1..99 native recorder iterations. One repeatRememberedActions call answers its scoped numeric dialog with count; no numeric prompt is sent for that dialog."
     },
     "nextGame": {
       "type": "object",

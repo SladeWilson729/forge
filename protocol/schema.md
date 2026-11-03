@@ -70,7 +70,7 @@ Sources are repository-relative to this commit. The enum signatures below preser
 | `sendYieldUpdate` | CLIENT | void | YieldUpdate | not sent by ProtocolGuiGame | no | setYield.kind and variant fields |
 | `setRememberedActions` | MACRO | void | none | not sent by ProtocolGuiGame | no | macroRecord |
 | `nextRememberedAction` | MACRO | void | none | not sent by ProtocolGuiGame | no | macroNext |
-| `repeatRememberedActions` | MACRO | void | none | not sent by ProtocolGuiGame | no | macroRepeat.count makes N parameterless calls, stopping if a prompt opens |
+| `repeatRememberedActions` | MACRO | void | none | not sent by ProtocolGuiGame | no | macroRepeat.count answers the native repeat-count dialog in one call |
 
 `setGameView` sends through updateGameView/sendFullState, not a one-to-one forwarding override. `applyDelta` uses GameProtocolSender directly after collection or for events-only replay; `write` batches without flushing. `showPromptMessage` uses send for a null card (timer path), otherwise syncAndSend. `getAbilityToPlay` deliberately sends a null triggerEvent. `getActivateDescription` is blocking in NetGameController.sendAndWait although it is CLIENT mode. The enum declares selectCard void while IGameController returns boolean: the native network drops that return. Section C covers the public controller methods separately.
 
@@ -175,7 +175,7 @@ All public method names are listed, including default methods. A getter or local
 | `addRememberedAction` | not exposed: records local PlayerAction objects |
 | `setRememberedActions` | macroRecord |
 | `nextRememberedAction` | macroNext |
-| `repeatRememberedActions` | macroRepeat.count; parameterless repeat called N times, stop on prompt |
+| `repeatRememberedActions` | macroRepeat.count; one native call with its numeric dialog answered by count |
 | `cancelPlayback` | not exposed: no macro-cancel message in plan (E10) |
 | `cancelCurrentMacro` | not exposed: default delegates to cancelPlayback; no macro-cancel message (E10) |
 | `isRecording` | not exposed: local query; server pushes macroState.recording |
@@ -251,7 +251,7 @@ All server messages require `seq: integer >= 0`, increasing per seat. Client gam
 | `reorderHand` | `cardId`: `CardRef`; `index`: `Int32` | IGameController.reorderHand |
 | `promptReply` | `requestId`: `RequestId`; `result`: `PromptResult` | Completes JsonSeatRemote pending future directly; Forge receives converted return value |
 | `setYield` | `kind`: enum `"setMarker"`, `"clearMarker"`, `"stackYield"`, `"untilEndOfTurn"`, `"cardAutoYield"`, `"triggerDecision"`, `"disableYields"`, `"disableTriggers"`, `"skipPhase"`, `"pref"`, `"seed"`, `"clearAbilityOrders"` | IGameController.sendYieldUpdate -> applyYieldUpdate |
-| `macroRepeat` | `count`: integer 1..99 | controller.macros().repeatRememberedActions repeated count times |
+| `macroRepeat` | `count`: integer 1..99 | controller.macros().repeatRememberedActions once, supplying count to its numeric dialog |
 | `nextGame` | `decision`: enum `"rematch"`, `"quit"` | IGameController.nextGameDecision: rematch -> NEW (same decks, fresh game), quit -> QUIT; CONTINUE unused (one game per match) |
 | `describeAbility` | `cardId`: `CardRef` | IGameController.getActivateDescription -> abilityDescription {cardId, text}; finished in task 1.12 area |
 
@@ -621,3 +621,9 @@ The original task 1.1 questions are retained below, followed by their plan 3.5 d
   Default (plan 3.5): Only game actions carry `clientSeq` and `baseSeq`; ids are 32-bit integers scoped to one game; `join` carries the client's `protocolVersion`; `macroRepeat.count` is capped at 99. Finished in task 1.4.
 
   Status: default, finished in task 1.4
+
+### Macro actions (task 2.13)
+
+The seat controller uses RecordActionsMacroSystem. macroRecord toggles recording; its stop-recording repeat dialog receives 0 so stopping does not also replay. macroNext invokes nextRememberedAction: in this recorder it plays the recorded sequence once, rather than a single stored click. macroRepeat invokes repeatRememberedActions once and answers only its scoped numeric repeat dialog with count (1..99). Other prompts retain their normal socket path. This corrects the earlier plan assumption of N parameterless repeat calls.
+
+applyMacroState is forwarded only to the owning seat with recording, replaying and hasActions. The recorder stores PlayerAction objects, including entity views and choice/phase metadata, and replays them through the current Input on EDT timers. Its bounded failed-action retries end with the native playback-stopped text, forwarded as message.level=rejected. Invalid counts receive "Macro repeat count must be between 1 and 99". Abandoned-seat rejection texts are preserved; conceded seats receive "You conceded this game", and other eliminated seats receive the existing "The game has ended" text.

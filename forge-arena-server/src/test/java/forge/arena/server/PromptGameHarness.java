@@ -141,7 +141,12 @@ final class PromptGameHarness implements AutoCloseable {
                         guiEvent.getMethod(), guiEvent.getId(), caller, remote.abandonedReason());
                 final Object result = remote.sendAndWait(event);
                 final String completion = remote.getLastReplyThread();
-                replyThreads.add(completion);
+                // Macro repeat-count dialogs are answered synchronously from the action,
+                // so they never create a pending socket prompt or a Netty completion.
+                boolean macroCount = guiEvent.getMethod() == forge.gamemodes.net.ProtocolMethod.showInputDialog
+                        && Objects.equals(guiEvent.getObjects()[0], forge.util.Localizer.getInstance().getMessage("lblHowManyTimesToRepeatSequence"))
+                        && Objects.equals(guiEvent.getObjects()[1], forge.util.Localizer.getInstance().getMessage("lblRepeatActionSequence"));
+                if (!macroCount) replyThreads.add(completion);
                 System.out.println("[prompt-test] " + guiEvent.getMethod() + " requestId=" + guiEvent.getId()
                         + " caller=" + caller + " completed=" + completion);
                 if (human != null) traceState("returned " + guiEvent.getMethod() + " requestId=" + guiEvent.getId());

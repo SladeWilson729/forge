@@ -37,6 +37,20 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /** Synchronous Forge-to-JSON boundary. Only SeatWriter does socket work. */
 public final class JsonSeatRemote implements IRemote {
+    private final ThreadLocal<String> macroRepeatCount = new ThreadLocal<>();
+
+    /** Native MACRO receiver, as in ProtocolMethod.receiver; scope only its count dialog. */
+    void macroAction(forge.interfaces.IGameController controller, String type, int count) {
+        macroRepeatCount.set(Integer.toString(type.equals("macroRepeat") ? count : 0));
+        try {
+            switch (type) {
+                case "macroRecord" -> controller.macros().setRememberedActions();
+                case "macroNext" -> controller.macros().nextRememberedAction();
+                case "macroRepeat" -> controller.macros().repeatRememberedActions();
+                default -> throw new IllegalArgumentException("Unknown macro action");
+            }
+        } finally { macroRepeatCount.remove(); }
+    }
     private static final System.Logger LOG = System.getLogger(JsonSeatRemote.class.getName());
     @FunctionalInterface
     public interface PromptResponder {
@@ -278,7 +292,8 @@ public final class JsonSeatRemote implements IRemote {
             case message, showErrorDialog -> {
                 final JsonObject message = new JsonObject();
                 message.addProperty("type", "message");
-                message.addProperty("level", gui.getMethod() == forge.gamemodes.net.ProtocolMethod.message ? "info" : "error");
+                final boolean macroStopped = java.util.Objects.equals(args[0], forge.util.Localizer.getInstance().getMessage("lblMacroPlaybackStopped"));
+                message.addProperty("level", macroStopped ? "rejected" : gui.getMethod() == forge.gamemodes.net.ProtocolMethod.message ? "info" : "error");
                 message.addProperty("text", (String) args[0]);
                 if (args.length > 1 && args[1] != null) {
                     message.addProperty("title", (String) args[1]);
@@ -288,6 +303,15 @@ public final class JsonSeatRemote implements IRemote {
             case alertUser -> {
                 final JsonObject message = new JsonObject();
                 message.addProperty("type", "attention");
+                writer.send(message);
+            }
+            case applyMacroState -> {
+                final var state = (forge.interfaces.IMacroSystem.State) args[0];
+                final JsonObject message = new JsonObject();
+                message.addProperty("type", "macroState");
+                message.addProperty("recording", state.recording());
+                message.addProperty("replaying", state.replaying());
+                message.addProperty("hasActions", state.hasActions());
                 writer.send(message);
             }
             case flashIncorrectAction -> actionRouter.reject("Forge rejected that action");
@@ -549,6 +573,12 @@ public final class JsonSeatRemote implements IRemote {
     @Override
     public Object sendAndWait(final IdentifiableNetEvent event) {
         if (event instanceof GuiGameEvent gui) {
+            if (macroRepeatCount.get() != null && gui.getMethod() == forge.gamemodes.net.ProtocolMethod.showInputDialog
+                    && Boolean.TRUE.equals(gui.getObjects()[5])
+                    && java.util.Objects.equals(gui.getObjects()[0], forge.util.Localizer.getInstance().getMessage("lblHowManyTimesToRepeatSequence"))
+                    && java.util.Objects.equals(gui.getObjects()[1], forge.util.Localizer.getInstance().getMessage("lblRepeatActionSequence"))) {
+                return macroRepeatCount.get();
+            }
             LOG.log(System.Logger.Level.INFO, "[prompt] sendAndWait method={0} thread={1} requestId={2}",
                     gui.getMethod(), Thread.currentThread().getName(), gui.getId());
             if (gui.getMethod() == forge.gamemodes.net.ProtocolMethod.getAbilityToPlay) {
