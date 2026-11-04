@@ -708,6 +708,7 @@
     "StateSnapshot": {
       "type": "object",
       "properties": {
+        "gameOver": { "type": "boolean", "$comment": "Game.isGameOver(); authoritative game lifecycle flag." },
         "turn": {
           "$ref": "#/$defs/Int32"
         },
@@ -785,6 +786,7 @@
         }
       },
       "required": [
+        "gameOver",
         "turn",
         "activePlayerId",
         "priorityPlayerId",
@@ -1555,6 +1557,7 @@
         "seq": {
           "$ref": "#/$defs/Sequence"
         },
+        "gameOver": { "type": "boolean", "$comment": "Game.isGameOver(); authoritative game lifecycle flag." },
         "turn": {
           "$ref": "#/$defs/Int32"
         },
@@ -1634,6 +1637,7 @@
       "required": [
         "type",
         "seq",
+        "gameOver",
         "turn",
         "activePlayerId",
         "priorityPlayerId",

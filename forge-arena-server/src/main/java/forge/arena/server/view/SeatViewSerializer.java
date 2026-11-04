@@ -98,6 +98,7 @@ public final class SeatViewSerializer {
             final JsonObject state = new JsonObject();
             state.addProperty("type", "state");
             state.addProperty("seq", seq);
+            state.addProperty("gameOver", game.isGameOver());
             state.addProperty("turn", view.getTurn());
             state.add("activePlayerId", playerRef(view.getPlayerTurn()));
             state.add("priorityPlayerId", playerRef(PlayerView.get(game.getPhaseHandler().getPriorityPlayer())));

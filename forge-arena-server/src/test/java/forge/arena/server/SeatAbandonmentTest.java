@@ -150,11 +150,13 @@ public class SeatAbandonmentTest {
                 lines.add("p0life=2"); lines.add("p1battlefield=Colossal Dreadmaw;Colossal Dreadmaw;Wall of Wood"); };
             h.start("Grizzly Bears;Runeclaw Bear;Forest", ""); EndOnPriority end = watch(h);
             try {
+                // Five seconds passed three isolated class runs but timed out under suite load.
+                // Use the same 30-second allowance as the harness's cold first-input wait.
                 Set<Input> answered = Collections.newSetFromMap(new IdentityHashMap<>());
                 h.advance(input -> {
                     if (input instanceof InputAttack && answered.add(input)) h.sendAction("ok");
                     return input instanceof InputBlock;
-                });
+                }, 30);
                 assertTrue(PromptGameHarness.edt(() -> !h.game.getCombat().getAttackers().isEmpty()));
                 disconnect(h);
                 assertEquals(console.submit("bot 0").get(10, TimeUnit.SECONDS), "Bot handoff complete");

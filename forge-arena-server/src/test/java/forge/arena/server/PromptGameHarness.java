@@ -374,6 +374,10 @@ final class PromptGameHarness implements AutoCloseable {
     }
 
     void advance(Predicate<Input> target) throws Exception {
+        advance(target, 5);
+    }
+
+    void advance(Predicate<Input> target, int seconds) throws Exception {
         AtomicReference<Input> last = new AtomicReference<>();
         AtomicReference<String> traced = new AtomicReference<>();
         until(() -> {
@@ -400,7 +404,7 @@ final class PromptGameHarness implements AutoCloseable {
                 last.set(input); if (socketActions) sendAction("ok"); else controller.selectButtonOk();
             }
             return false;
-        }, "advance to next Input");
+        }, "advance to next Input", seconds);
     }
 
     JsonObject sendAction(String type, Object... fields) {

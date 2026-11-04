@@ -121,8 +121,9 @@ final class SeatAbandonment implements AutoCloseable {
                     SeatWriter writer = server.writer(seat); JsonSeatRemote remote = writer.remote();
                     long elapsed = writer.disconnectedAtNanos() == 0 ? 0
                             : Math.max(0, TimeUnit.NANOSECONDS.toSeconds(clock.getAsLong() - writer.disconnectedAtNanos()));
-                    seats.append("Seat ").append(seat).append(": ").append(remote == null ? "unbound" : remote.seatName())
-                            .append(writer.connected() ? ", connected" : ", disconnected " + elapsed + " s").append('\n');
+                    boolean ai = remote != null && !remote.isHumanSeat();
+                    seats.append("Seat ").append(seat).append(": ").append(remote == null ? "unbound" : ai ? "AI (" + remote.seatName() + ")" : remote.seatName())
+                            .append(ai ? writer.connected() ? ", viewer connected" : "" : writer.connected() ? ", connected" : ", disconnected " + elapsed + " s").append('\n');
                 }
                 reply(command, seats.toString().stripTrailing()); return;
             }

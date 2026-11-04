@@ -129,6 +129,7 @@ public class StateFieldProbeTest {
         private void probeFields() {
             final GameView view = game.getView();
             read("GameView.getTurn", view::getTurn);
+            read("Game.isGameOver", game::isGameOver);
             read("GameView.getPlayerTurn", view::getPlayerTurn);
             read("GameView.getPhase", view::getPhase);
             read("GameView.getPlayers", view::getPlayers);

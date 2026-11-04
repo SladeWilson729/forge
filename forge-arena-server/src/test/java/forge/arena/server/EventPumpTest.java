@@ -217,7 +217,7 @@ public class EventPumpTest {
     }
 
     private static JsonObject emptyState() {
-        return JsonParser.parseString("{\"type\":\"state\",\"turn\":0,\"activePlayerId\":null,\"priorityPlayerId\":null,"
+        return JsonParser.parseString("{\"type\":\"state\",\"gameOver\":false,\"turn\":0,\"activePlayerId\":null,\"priorityPlayerId\":null,"
                 + "\"phase\":null,\"monarchId\":null,\"initiativeId\":null,\"players\":[],\"stack\":[],\"activeInput\":{\"kind\":\"waiting\"}}")
                 .getAsJsonObject();
     }
