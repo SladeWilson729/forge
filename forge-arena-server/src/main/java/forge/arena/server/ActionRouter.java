@@ -40,6 +40,7 @@ final class ActionRouter {
     void accept(JsonObject message, java.util.function.Consumer<String> result) {
         try {
             require(abandonedReason == null, abandonedReason);
+            require(writer.viewerReason() == null, writer.viewerReason());
             if (message.has("type") && message.get("type").getAsString().equals("macroRepeat")) {
                 try {
                     int count = forge.arena.server.prompt.PromptCodec.integer(message.get("count"));
@@ -135,6 +136,7 @@ final class ActionRouter {
 
     private void apply(JsonObject m, String receivedKind, Map<String, Ref> refs, List<Ref> others) {
         require(abandonedReason == null, abandonedReason);
+        require(writer.viewerReason() == null, writer.viewerReason());
         Game game = remote.actionGame();
         require(game != null && remote.actionSeat() != null, "The game is not ready");
         Player player = game.getPlayer(remote.actionSeat());

@@ -118,8 +118,8 @@ public final class JsonSeatRemote implements IRemote {
     private int inputWaiters;
     private final java.util.Map<Thread, InputPassPriority> priorityWaiters = new java.util.HashMap<>();
     private List<InputPassPriority> abandonedPriorities = List.of();
-    private final CompletableFuture<Void> abandonmentReady = new CompletableFuture<>();
-    private final CompletableFuture<Void> abandonmentApplied = new CompletableFuture<>();
+    private CompletableFuture<Void> abandonmentReady = new CompletableFuture<>();
+    private CompletableFuture<Void> abandonmentApplied = new CompletableFuture<>();
     private final java.util.concurrent.atomic.AtomicInteger abandonmentInputWaits = new java.util.concurrent.atomic.AtomicInteger();
     private volatile String seatName = "Unbound seat";
     private volatile boolean gameFinished;
@@ -129,7 +129,22 @@ public final class JsonSeatRemote implements IRemote {
     private final java.util.concurrent.ConcurrentLinkedQueue<forge.gamemodes.net.ProtocolMethod> immediateDefaults = new java.util.concurrent.ConcurrentLinkedQueue<>();
     String abandonedReason() { return abandonedReason; }
     String seatName() { return seatName; }
-    boolean isHumanSeat() { return registeredPlayer != null; }
+    boolean isHumanSeat() { return registeredPlayer != null && writer.viewerReason() == null; }
+    /** EDT, after game completion and before native NEW. Future games use an AI seat view. */
+    void prepareAbandonedRematch() {
+        FThreads.assertExecutedByEdt(true);
+        if (abandonedReason == null) return;
+        if (!(registeredPlayer.getPlayer() instanceof forge.ai.LobbyPlayerAi))
+            registeredPlayer.setPlayer(new forge.ai.LobbyPlayerAi(seatName, null));
+        writer.makeBotViewer();
+        synchronized (abandonmentLock) {
+            abandonedReason = null; inputWaiters = 0; priorityWaiters.clear(); abandonedPriorities = List.of();
+            abandonmentReady = new CompletableFuture<>(); abandonmentApplied = new CompletableFuture<>();
+        }
+        actionRouter.abandon(null);
+        abandonmentInputWaits.set(0); abandonmentDefaults.set(0);
+        abandonmentCompletionThread = null; immediateDefaults.clear();
+    }
     boolean hasGameState() { return hasGameState; }
     boolean gameFinished() { return gameFinished; }
     HostedMatch hostedMatch() { return match; }

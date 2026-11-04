@@ -35,6 +35,7 @@ final class MatchLifecycle implements AutoCloseable {
         });
     }
     void finished() { FThreads.invokeInEdtLater(() -> { ended = true; check(); }); }
+    boolean ended() { FThreads.assertExecutedByEdt(true); return ended; }
     void command(String command) {
         FThreads.invokeInEdtLater(() -> {
             if (command.equals("quit")) quit("Host");
@@ -52,17 +53,26 @@ final class MatchLifecycle implements AutoCloseable {
             if (deadline != 0 && System.nanoTime() > deadline) stopped.completeExceptionally(new IllegalStateException("Game did not finish within arena.timeoutMinutes"));
             return;
         }
-        for (int seat : humans) {
-            JsonSeatRemote remote = server.writer(seat).remote();
-            if (remote != null && remote.abandonedReason() != null) { quit(remote.seatName()); return; }
-        }
         // No connected humans: keep the results available until the host chooses.
         if (rematches.isEmpty()) return;
-        for (int seat : humans) if (server.writer(seat).connected() && !rematches.contains(seat)) return;
+        for (int seat : humans) {
+            SeatWriter writer = server.writer(seat);
+            JsonSeatRemote remote = writer.remote();
+            if (remote != null && (remote.abandonedReason() != null || !remote.isHumanSeat())) continue;
+            if (writer.connected() && !rematches.contains(seat)) return;
+        }
+        for (int seat : humans) {
+            JsonSeatRemote remote = server.writer(seat).remote();
+            if (remote != null && remote.abandonedReason() != null) remote.prepareAbandonedRematch();
+        }
         ended = false; rematches.clear();
-        if (humans.isEmpty()) { match.restartMatch(); return; }
-        // Native NEW tally includes disconnected humans; they do not veto connected voters.
-        for (var controller : List.copyOf(match.getHumanControllers())) controller.nextGameDecision(NextGameDecision.NEW);
+        // Match HostedMatch.stillPlaying: a handed-off controller is no longer a voter.
+        // Sending it NEW after the last eligible vote could vote into the NEW game's tally.
+        var voters = match.getHumanControllers().stream().filter(c -> c.getPlayer() == null
+                || c.getPlayer().getOriginalLobbyPlayer() == c.getLobbyPlayer()).toList();
+        if (voters.isEmpty()) { match.restartMatch(); return; }
+        // Include disconnected/conceded human controllers in the native tally as yes votes.
+        for (var controller : voters) controller.nextGameDecision(NextGameDecision.NEW);
     }
     private void quit(String name) {
         if (quitting) return;

@@ -427,7 +427,8 @@ final class PromptGameHarness implements AutoCloseable {
             healthy(); if (edt(predicate)) return; Thread.sleep(10);
         }
         dumpThreads("Timed out: " + label);
-        fail("Timed out: " + label + "; input=" + edt(() -> human.getInputQueue().getInput()));
+        fail("Timed out: " + label + edt(() -> "; humanInput=" + (human == null ? null : human.getInputQueue().getInput())
+                + "; secondaryHumanInput=" + (secondaryHuman == null ? null : secondaryHuman.getInputQueue().getInput())));
     }
     static <T> FutureTask<T> later(Callable<T> action) {
         FutureTask<T> task = new FutureTask<>(action); FThreads.invokeInEdtLater(task); return task;

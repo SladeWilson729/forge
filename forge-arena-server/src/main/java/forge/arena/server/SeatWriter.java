@@ -27,6 +27,10 @@ public final class SeatWriter implements AutoCloseable {
     private final ConcurrentLinkedQueue<Runnable> transcriptWork = new ConcurrentLinkedQueue<>();
     private TranscriptLog transcript;
     private volatile forge.deck.Deck acceptedDeck;
+    // Match-lifetime access policy, independent of the current game's abandonment state.
+    private volatile String viewerReason;
+    String viewerReason() { return viewerReason; }
+    void makeBotViewer() { viewerReason = "This seat is now played by a bot"; }
     java.util.function.Consumer<forge.gamemodes.match.NextGameDecision> nextGame;
     boolean decideNextGame(forge.gamemodes.match.NextGameDecision decision) {
         if (nextGame == null) return false;
