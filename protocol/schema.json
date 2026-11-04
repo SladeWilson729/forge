@@ -1841,6 +1841,19 @@
             }
           ]
         },
+        "placements": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "playerId": { "$ref": "#/$defs/PlayerRef" },
+              "reason": { "type": "string" }
+            },
+            "required": ["playerId"],
+            "additionalProperties": false
+          },
+          "$comment": "gameOver only: winner first, then reverse elimination order. Reasons are Forge GameLossReason names."
+        },
         "winner": {
           "anyOf": [
             {
@@ -2661,11 +2674,24 @@
               },
               "turn": {
                 "$ref": "#/$defs/Int32"
+              },
+              "placements": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "playerId": { "$ref": "#/$defs/PlayerRef" },
+                    "reason": { "type": "string" }
+                  },
+                  "required": ["playerId"],
+                  "additionalProperties": false
+                }
               }
             },
             "required": [
               "winner",
-              "turn"
+              "turn",
+              "placements"
             ]
           }
         }

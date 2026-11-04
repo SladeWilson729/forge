@@ -145,7 +145,10 @@ final class ActionRouter {
             require(!player.hasLost(), player.conceded() ? "You conceded this game" : "The game has ended");
         }
         if (type.equals("nextGame")) {
-            require(game.isGameOver(), "The game has not ended"); controller.nextGameDecision(nextGame(m.get("decision").getAsString())); return;
+            require(game.isGameOver(), "The game has not ended");
+            var decision = nextGame(m.get("decision").getAsString());
+            if (!remote.decideNextGame(decision)) controller.nextGameDecision(decision);
+            return;
         }
         require(!game.isGameOver(), "The game has ended");
         if (type.equals("concede")) {

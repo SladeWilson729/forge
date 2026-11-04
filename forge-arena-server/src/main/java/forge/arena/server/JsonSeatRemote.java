@@ -61,9 +61,10 @@ public final class JsonSeatRemote implements IRemote {
     private PlayerView seat;
     private final HostedMatch match;
     private final RegisteredPlayer registeredPlayer;
-    private final IdMapper ids = new IdMapper();
+    private IdMapper ids = new IdMapper();
     private final SeatViewSerializer serializer = new SeatViewSerializer();
-    private final ActiveInputTracker inputTracker = new ActiveInputTracker();
+    private ActiveInputTracker inputTracker = new ActiveInputTracker();
+    boolean decideNextGame(forge.gamemodes.match.NextGameDecision decision) { return writer.decideNextGame(decision); }
     // Our JSON/bookkeeping only. Never held across a Forge call or a graph walk.
     private final Object stateLock = new Object();
     private boolean buildingSnapshot;
@@ -264,6 +265,8 @@ public final class JsonSeatRemote implements IRemote {
             return;
         }
         final Object[] args = gui.getObjects();
+        // HostedMatch clears its game before sending teardown display calls.
+        if (gameFinished && match != null && match.getGame() == null) return;
         switch (gui.getMethod()) {
             case applyYieldUpdate -> writer.send(yields.encode((forge.gamemodes.match.YieldUpdate) args[0]));
             case setSelection, updateButtons, showPromptMessage, setWeaklySelectable,
@@ -516,6 +519,9 @@ public final class JsonSeatRemote implements IRemote {
             // HostedMatch sorts humans first; wire seat numbers are never game-list indexes.
             seat = ArenaServerMain.playerFor(running, registeredPlayer).getView();
             game = running;
+            ids = new IdMapper(); inputTracker = new ActiveInputTracker();
+            latestState = null; revealed = new com.google.gson.JsonArray();
+            inputOffers.clear(); abilities = java.util.Map.of();
             writer.bindPlayer(seat.getId(), game.getId());
             eventPump = null;
         }

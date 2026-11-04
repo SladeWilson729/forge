@@ -138,7 +138,17 @@ public class TranscriptLogTest {
             Thread.sleep(1100); // File names contain whole seconds; make both game start times distinct.
             server.writer(0).bindPlayer(7, 7002);
             JsonObject second = first.deepCopy(); second.addProperty("text", "second game");
-            server.writer(0).send(second); assertEquals(client.receive(), second);
+            server.writer(0).send(second);
+            // A new game keeps the socket/token, but begins a fresh game preamble.
+            JsonObject hello = client.receive(); PromptAssertions.validate(hello, "hello");
+            assertEquals(hello.get("type").getAsString(), "hello");
+            assertEquals(hello.get("playerId").getAsInt(), 7);
+            assertEquals(hello.get("seq").getAsLong(), 0L);
+            JsonObject tail = client.receive(); PromptAssertions.validate(tail, "logTail");
+            assertEquals(tail.get("type").getAsString(), "logTail");
+            assertEquals(tail.get("seq").getAsLong(), 0L);
+            assertTrue(tail.getAsJsonArray("entries").isEmpty(), "Previous game's log is retired");
+            assertEquals(client.receive(), second);
             server.close();
             List<Path> files;
             try (var paths = Files.list(directory)) { files = paths.filter(p -> p.toString().endsWith(".jsonl")).toList(); }

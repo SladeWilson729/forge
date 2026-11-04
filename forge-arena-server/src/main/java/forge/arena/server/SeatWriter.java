@@ -27,6 +27,11 @@ public final class SeatWriter implements AutoCloseable {
     private final ConcurrentLinkedQueue<Runnable> transcriptWork = new ConcurrentLinkedQueue<>();
     private TranscriptLog transcript;
     private volatile forge.deck.Deck acceptedDeck;
+    java.util.function.Consumer<forge.gamemodes.match.NextGameDecision> nextGame;
+    boolean decideNextGame(forge.gamemodes.match.NextGameDecision decision) {
+        if (nextGame == null) return false;
+        nextGame.accept(decision); return true;
+    }
 
     forge.deck.Deck acceptedDeck() { return acceptedDeck; }
 
@@ -178,15 +183,26 @@ public final class SeatWriter implements AutoCloseable {
         final GameStart start = gameStarts.computeIfAbsent(gameId,
                 ignored -> new GameStart(java.time.ZonedDateTime.now(), System.nanoTime()));
         synchronized (queueLock) {
+            final long oldSequence = sequence;
             transcriptWork.add(() -> {
                 if (transcriptGame != gameId) {
+                    if (transcriptGame != -1) {
+                        synchronized (queueLock) {
+                            messages.removeIf(message -> message.seq() <= oldSequence); logTail.clear();
+                            if (pendingState != null && pendingState.seq() <= oldSequence) pendingState = null;
+                            // Keep the newly queued game's snapshot, but retire the old cache.
+                            lastState = null; lastStatePayload = null; lastStateSeq = 0;
+                        }
+                    }
                     disconnectedAtNanos = connected() ? 0 : System.nanoTime();
                     if (transcript != null) transcript.close();
                     transcriptGame = gameId;
                     transcript = new TranscriptLog(seat, playerId, start.time(), start.nanos());
                     if (bandwidth != null) { meter = bandwidth.game(gameId, start).seats[seat]; finishMeter = false; }
                 }
+                boolean newGame = hello != null;
                 bindPlayer(playerId);
+                if (newGame && connected()) { write(hello); replayPending = true; }
             });
         }
         LockSupport.unpark(thread);

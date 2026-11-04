@@ -29,6 +29,7 @@ public final class EventPump {
     private Set<Integer> previousTriggers = Set.of();
     private Map<JsonElement, JsonObject> stubs = Map.of();
     private PayloadFilter.LogVisibility logVisibility = PayloadFilter.LogVisibility.empty();
+    private JsonArray placements = new JsonArray();
 
     public EventPump(PlayerView seat, IdMapper ids) {
         this.seat = seat;
@@ -38,6 +39,18 @@ public final class EventPump {
     /** Only called where the full snapshot is built: never on a timer or I/O thread. */
     public List<JsonObject> snapshot(Game game, JsonObject state, Map<JsonElement, JsonObject> cardStubs) {
         stubs = cardStubs;
+        if (game.isGameOver()) {
+            placements = new JsonArray();
+            var ordered = new ArrayList<>(game.getRegisteredPlayers());
+            ordered.removeAll(game.getLostPlayers());
+            var lost = new ArrayList<>(game.getLostPlayers()); Collections.reverse(lost); ordered.addAll(lost);
+            for (var player : ordered) {
+                JsonObject place = new JsonObject(); place.addProperty("playerId", player.getId());
+                var outcome = player.getOutcome();
+                if (outcome != null && outcome.lossState != null) place.addProperty("reason", outcome.lossState.name());
+                placements.add(place);
+            }
+        }
         logVisibility = filter.captureLogVisibility(game, seat);
         final List<JsonObject> result = new ArrayList<>();
         final long seq = state.get("seq").getAsLong();
@@ -274,6 +287,7 @@ public final class EventPump {
         }
         @Override public Void visit(GameEventGameOutcome ev) {
             JsonObject e = emit("gameOver"); e.addProperty("winner", ev.winningPlayerName());
+            e.add("placements", placements.deepCopy());
             e.addProperty("turn", ev.lastTurnNumber()); return null;
         }
         @Override public Void visit(GameEventAddLog ev) {

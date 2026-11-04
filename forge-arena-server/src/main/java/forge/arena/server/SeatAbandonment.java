@@ -33,6 +33,7 @@ final class SeatAbandonment implements AutoCloseable {
     private volatile boolean closed;
     private volatile boolean inputEnded;
     private volatile CompletableFuture<Void> exitOnEnter;
+    java.util.function.Consumer<String> matchCommand;
 
     SeatAbandonment(WsServer server) {
         this(server, new InputStreamReader(System.in, StandardCharsets.UTF_8), System.out,
@@ -110,6 +111,9 @@ final class SeatAbandonment implements AutoCloseable {
     private void execute(Command command) {
         try {
             String text = command.text().trim();
+            if (matchCommand != null && java.util.Set.of("rematch", "quit").contains(text)) {
+                matchCommand.accept(text); reply(command, "[arena] " + text); return;
+            }
             if (text.isEmpty() && exitOnEnter != null) { exitOnEnter.complete(null); command.result().complete(""); return; }
             if (text.equals("seats")) {
                 StringBuilder seats = new StringBuilder();
@@ -124,7 +128,7 @@ final class SeatAbandonment implements AutoCloseable {
             }
             String[] parts = text.split("\\s+");
             if (parts.length != 2 || !java.util.Set.of("wait", "concede", "bot", "keep").contains(parts[0]))
-                throw new IllegalArgumentException("Commands: seats, wait N, concede N, bot N, keep N");
+                throw new IllegalArgumentException("Commands: seats, wait N, concede N, bot N, keep N, rematch, quit");
             int seat;
             try { seat = Integer.parseInt(parts[1]); } catch (NumberFormatException ex) { throw new IllegalArgumentException("Seat must be 0..3"); }
             SeatWriter writer = server.writer(seat); JsonSeatRemote remote = writer.remote();

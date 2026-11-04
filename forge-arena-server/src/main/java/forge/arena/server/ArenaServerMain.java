@@ -30,10 +30,10 @@ import java.util.Set;
 import java.util.HashMap;
 import java.util.HashSet;
 import forge.player.LobbyPlayerHuman;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 
-/** Boots Forge and plays one four-player Commander game without a window. */
+
+
+/** Boots a persistent headless four-player Commander match server. */
 public final class ArenaServerMain {
     private ArenaServerMain() { }
 
@@ -109,13 +109,16 @@ public final class ArenaServerMain {
         }
         System.out.println("[arena] WebSocket listening on ws://" + host + ":" + wsServer.getPort() + "/ws");
 
+        int exitCode = 0;
         try (SeatAbandonment console = new SeatAbandonment(wsServer)) {
             final List<SeatProtocolGui> seatViews = new ArrayList<>();
+            final MatchLifecycle[] lifecycle = new MatchLifecycle[1];
             final HostedMatch match = new HostedMatch() {
                 @Override
                 public void registerSpectator(final IGuiGame gui, final PlayerControllerHuman controller) {
                     // This runs before gameplay is scheduled. The start-game hook is too late:
                     // PhaseHandler fires turn 1 before calling that hook.
+                    seatViews.clear();
                     getGame().subscribeToEvents(new TurnLogger());
                     for (int seat = 0; seat < 4; seat++) {
                         final Player player = playerFor(getGame(), players.get(seat));
@@ -128,8 +131,11 @@ public final class ArenaServerMain {
                     super.registerSpectator(gui, controller);
                 }
             };
-            final CountDownLatch finished = new CountDownLatch(1);
+            lifecycle[0] = new MatchLifecycle(wsServer, match, humanSeats);
+            console.matchCommand = lifecycle[0]::command;
             match.setStartGameHook(() -> {
+                lifecycle[0].started();
+                if (!humanSeats.isEmpty()) seatViews.clear();
                 // HostedMatch otherwise automatically continues an all-AI match into another game.
                 match.getGame().getRules().setGamesPerMatch(1);
                 if (puzzle != null) puzzle.apply(match.getGame(), players);
@@ -156,7 +162,10 @@ public final class ArenaServerMain {
                         gui.getForwarder().flush(); gui.updateGameView();
                     }
                 }
-                finished.countDown();
+                final GameOutcome outcome = match.getGame().getOutcome();
+                System.out.println("[arena] Winner: " + (outcome.isDraw() ? "Draw" : outcome.getWinningLobbyPlayer().getName()));
+                wsServer.finishMeters();
+                lifecycle[0].finished();
             });
             // The game type alone does not set GameRules.hasCommander().
             final Map<RegisteredPlayer, IGuiGame> guis = new HashMap<>();
@@ -168,25 +177,14 @@ public final class ArenaServerMain {
                 catch (RuntimeException | Error ex) { started.completeExceptionally(ex); }
             });
             started.join(); // Lifecycle thread only; initial human setGameView snapshots run on EDT.
-            final Game game = match.getGame();
-            final long limit = Long.getLong("arena.timeoutMinutes", 30L);
-            if (!finished.await(limit, TimeUnit.MINUTES) || !game.isGameOver()) {
-                System.err.println("[arena] Game did not finish within " + limit + " minutes");
-                wsServer.close();
-                System.exit(1);
-                return;
-            }
-            final GameOutcome outcome = game.getOutcome();
-            System.out.println("[arena] Winner: " + (outcome.isDraw() ? "Draw" : outcome.getWinningLobbyPlayer().getName()));
-            wsServer.finishMeters();
-            if (Boolean.getBoolean("arena.hold")) {
-                console.awaitEnter();
-            }
+            try (MatchLifecycle owner = lifecycle[0]) { owner.awaitShutdown(); }
+        } catch (java.util.concurrent.CompletionException ex) {
+            System.err.println("[arena] " + ex.getCause()); exitCode = 1;
         } finally {
             wsServer.close();
         }
         // Forge owns background executors and the Swing EDT; this standalone process is finished.
-        System.exit(0);
+        System.exit(exitCode);
     }
 
     static Set<Integer> humanSeats(String value) {
