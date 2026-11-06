@@ -16,7 +16,7 @@ import forge.gamemodes.net.ProtocolGuiGame;
 import forge.gui.interfaces.IGuiGame;
 import forge.player.GamePlayerUtil;
 import forge.player.PlayerControllerHuman;
-import org.junit.*;
+import org.testng.annotations.*;
 
 import java.io.StringReader;
 import java.nio.file.*;
@@ -24,15 +24,15 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 
-import static org.junit.Assert.*;
+import static org.testng.Assert.*;
 
-/** JUnit lifecycle tests; actual Forge games and sockets use the existing server harness. */
+/** TestNG lifecycle tests; actual Forge games and sockets use the existing server harness. */
 public class SeededRunTest {
     private final Map<String, String> properties = new HashMap<>();
     private Path directory;
 
-    @BeforeClass public static void initialize() { PromptGameHarness.initialize(); }
-    @Before public void setup() throws Exception {
+    @BeforeClass public void initialize() { PromptGameHarness.initialize(); }
+    @BeforeMethod public void setup() throws Exception {
         PromptGameHarness.initialize();
         for (String key : List.of("arena.seed", "arena.commit", "arena.transcriptDir", "arena.summary", "arena.deck.seat0")) properties.put(key, System.getProperty(key));
         directory = Files.createTempDirectory("arena-seeded-run-");
@@ -40,15 +40,15 @@ public class SeededRunTest {
         System.setProperty("arena.transcriptDir", directory.toString());
         System.setProperty("arena.summary", directory.resolve("summary.json").toString());
     }
-    @After public void restore() {
+    @AfterMethod(alwaysRun = true) public void restore() {
         properties.forEach((key, value) -> { if (value == null) System.clearProperty(key); else System.setProperty(key, value); });
     }
     private RunSummary summary() { RunSummary run = new RunSummary(); run.configureSeed(); return run; }
     private JsonObject written(RunSummary run, RunSummary.Exit exit) throws Exception {
         run.write(exit);
         JsonObject json = JsonParser.parseString(Files.readString(run.path())).getAsJsonObject();
-        assertEquals(exit.reason(), json.get("exitReason").getAsString()); assertEquals(exit.code(), json.get("exitCode").getAsInt());
-        assertEquals("test-commit", json.get("serverCommit").getAsString());
+        assertEquals(json.get("exitReason").getAsString(), exit.reason()); assertEquals(json.get("exitCode").getAsInt(), exit.code());
+        assertEquals(json.get("serverCommit").getAsString(), "test-commit");
         assertTrue(json.get("durationMs").getAsLong() >= 0);
         try (var files = Files.list(directory)) { assertFalse(files.anyMatch(p -> p.toString().endsWith(".tmp"))); }
         return json;
@@ -87,12 +87,12 @@ public class SeededRunTest {
         match.setEndGameHook(ended::countDown);
         try {
             PromptGameHarness.edt(() -> { match.startMatch(GameType.Commander, EnumSet.of(GameType.Commander), players, Map.of()); return null; });
-            assertTrue("Initial shuffle game ended", ended.await(30, TimeUnit.SECONDS));
+            assertTrue(ended.await(30, TimeUnit.SECONDS), "Initial shuffle game ended");
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
             while (!match.isMatchOver() && System.nanoTime() < deadline) Thread.sleep(10);
-            assertTrue("Native post-game flush finished before the next seeded run", match.isMatchOver());
-            assertEquals(4, capture.libraries.size());
-            capture.libraries.values().forEach(cards -> assertEquals(99, cards.size()));
+            assertTrue(match.isMatchOver(), "Native post-game flush finished before the next seeded run");
+            assertEquals(capture.libraries.size(), 4);
+            capture.libraries.values().forEach(cards -> assertEquals(cards.size(), 99));
             return Map.copyOf(capture.libraries);
         } finally {
             if (capture.game != null && !capture.game.isGameOver()) {
@@ -103,10 +103,10 @@ public class SeededRunTest {
         }
     }
 
-    @Test(timeout = 120_000) public void openingShufflesRepeatForEverySeat() throws Exception {
+    @Test(timeOut = 120_000) public void openingShufflesRepeatForEverySeat() throws Exception {
         Map<Integer, List<String>> first = opening(34567), second = opening(34567), different = opening(-98765);
-        assertEquals(first, second);
-        for (int seat = 0; seat < 4; seat++) assertNotEquals("Different seed changes seat " + seat + "'s shuffle", first.get(seat), different.get(seat));
+        assertEquals(second, first);
+        for (int seat = 0; seat < 4; seat++) assertNotEquals(different.get(seat), first.get(seat), "Different seed changes seat " + seat + "'s shuffle");
     }
 
     @Test public void gameIndexesAndHeadersIncludeRematchSeedsAndOverflow() throws Exception {
@@ -115,22 +115,22 @@ public class SeededRunTest {
             run.beforeGame();
             JsonObject game = run.snapshot(new RunSummary.Exit("quit", 0, "test")).getAsJsonArray("games").get(index).getAsJsonObject();
             long seed = Long.MAX_VALUE + index;
-            assertEquals(index, game.get("gameIndex").getAsInt()); assertEquals(seed, game.get("seed").getAsLong());
+            assertEquals(game.get("gameIndex").getAsInt(), index); assertEquals(game.get("seed").getAsLong(), seed);
             try (TranscriptLog log = new TranscriptLog(2, 9, java.time.ZonedDateTime.now(), System.nanoTime(), index, seed, "test-commit", file -> { })) { log.flush(); }
         }
         try (var files = Files.list(directory)) {
-            List<Path> paths = files.filter(p -> p.toString().endsWith(".jsonl")).sorted().toList(); assertEquals(2, paths.size());
+            List<Path> paths = files.filter(p -> p.toString().endsWith(".jsonl")).sorted().toList(); assertEquals(paths.size(), 2);
             Set<Long> seeds = new HashSet<>(); Set<Integer> indexes = new HashSet<>();
             for (Path path : paths) {
                 JsonObject header = JsonParser.parseString(Files.readAllLines(path).get(0)).getAsJsonObject();
                 seeds.add(header.get("seed").getAsLong()); indexes.add(header.get("gameIndex").getAsInt());
-                assertEquals("test-commit", header.get("serverCommit").getAsString());
+                assertEquals(header.get("serverCommit").getAsString(), "test-commit");
             }
-            assertEquals(Set.of(Long.MAX_VALUE, Long.MIN_VALUE), seeds); assertEquals(Set.of(0, 1), indexes);
+            assertEquals(seeds, Set.of(Long.MAX_VALUE, Long.MIN_VALUE)); assertEquals(indexes, Set.of(0, 1));
         }
     }
 
-    @Test(timeout = 150_000) public void summariesCoverAllLifecycleExitReasons() throws Exception {
+    @Test(timeOut = 150_000) public void summariesCoverAllLifecycleExitReasons() throws Exception {
         for (String reason : List.of("finished", "quit", "aborted", "timeout", "error")) {
             RunSummary run = summary(); AtomicLong time = new AtomicLong(100);
             try (PromptGameHarness h = new PromptGameHarness(true)) {
@@ -153,37 +153,62 @@ public class SeededRunTest {
                     else if (reason.equals("error")) lifecycle.failure(new IllegalStateException("Injected game failure"));
                     else console.submit(reason.equals("aborted") ? "abort" : "quit").get(5, TimeUnit.SECONDS);
                     lifecycle.shutdown().get(5, TimeUnit.SECONDS);
-                    assertEquals(reason, lifecycle.result().reason());
+                    assertEquals(lifecycle.result().reason(), reason);
                     if (reason.equals("aborted")) {
-                        assertEquals(3, lifecycle.result().code()); assertTrue(h.server.writer(0).connected());
+                        assertEquals(lifecycle.result().code(), 3); assertTrue(h.server.writer(0).connected());
                         assertNull(h.remote.abandonedReason());
                         assertFalse(PromptGameHarness.edt(() -> h.human.getPlayer().conceded()));
                         assertFalse(h.game.isGameOver());
                     }
                     JsonObject json = written(run, lifecycle.result());
-                    assertEquals(1, json.getAsJsonArray("games").size());
+                    assertEquals(json.getAsJsonArray("games").size(), 1);
                     JsonObject game = json.getAsJsonArray("games").get(0).getAsJsonObject();
-                    assertEquals(4, game.getAsJsonArray("seats").size()); assertEquals(4, game.getAsJsonArray("placements").size());
-                    assertEquals(123456789L, game.get("seed").getAsLong());
+                    assertEquals(game.getAsJsonArray("seats").size(), 4); assertEquals(game.getAsJsonArray("placements").size(), 4);
+                    assertEquals(game.get("seed").getAsLong(), 123456789L);
                     assertTrue(game.get("randomCalls").getAsLong() > 0);
-                    if (reason.equals("finished")) { assertEquals(0, game.get("winnerSeat").getAsInt()); assertFalse(game.get("draw").getAsBoolean()); }
-                    assertEquals(4, json.getAsJsonArray("transcripts").size());
+                    if (reason.equals("finished")) { assertEquals(game.get("winnerSeat").getAsInt(), 0); assertFalse(game.get("draw").getAsBoolean()); }
+                    assertEquals(json.getAsJsonArray("transcripts").size(), 4);
                     for (var value : json.getAsJsonArray("transcripts")) {
-                        JsonObject file = value.getAsJsonObject(); assertEquals(0, file.get("gameIndex").getAsInt());
+                        JsonObject file = value.getAsJsonObject(); assertEquals(file.get("gameIndex").getAsInt(), 0);
                         JsonObject header = JsonParser.parseString(Files.readAllLines(directory.resolve(file.get("file").getAsString())).get(0)).getAsJsonObject();
-                        assertEquals(file.get("seat"), header.get("seat")); assertEquals(game.get("seed"), header.get("seed"));
-                        assertEquals("test-commit", header.get("serverCommit").getAsString());
+                        assertEquals(header.get("seat"), file.get("seat")); assertEquals(header.get("seed"), game.get("seed"));
+                        assertEquals(header.get("serverCommit").getAsString(), "test-commit");
                     }
                 }
             }
         }
     }
 
-    @Test(timeout = 90_000) public void badDeckStartupUsesTheMainShutdownSummary() throws Exception {
+    @Test(timeOut = 120_000) public void consoleTakeoversRecordTheirKindAndTurn() throws Exception {
+        for (boolean bot : List.of(true, false)) {
+            RunSummary run = summary();
+            try (PromptGameHarness h = new PromptGameHarness();
+                 SeatAbandonment console = new SeatAbandonment(h.server, new StringReader(""), System.out, 180, System::nanoTime)) {
+                run.seats(h.players); h.server.runSummary(run); run.beforeGame();
+                SeatAbandonmentTest.EndOnPriority[] end = new SeatAbandonmentTest.EndOnPriority[1];
+                h.extraSetup = game -> { end[0] = new SeatAbandonmentTest.EndOnPriority(game); game.subscribeToEvents(end[0]); };
+                h.start("Forest", "");
+                int turn = PromptGameHarness.edt(() -> h.game.getPhaseHandler().getTurn());
+                h.client.close(); h.until(() -> !h.server.writer(0).connected(), "Disconnected before takeover");
+                end[0].finish.set(true);
+                var handoff = console.submit((bot ? "bot" : "concede") + " 0");
+                h.until(() -> h.remote.abandonedReason() != null, "Abandonment flagged");
+                // The handoff retires this human's Input; there is no next Input to advance to.
+                assertEquals(handoff.get(10, TimeUnit.SECONDS), bot ? "Bot handoff complete" : "Seat conceded");
+                assertTrue(h.finished.await(10, TimeUnit.SECONDS));
+                JsonObject json = written(run, new RunSummary.Exit("finished", 0, "Takeover game ended"));
+                JsonObject seat = json.getAsJsonArray("games").get(0).getAsJsonObject().getAsJsonArray("seats").get(0).getAsJsonObject();
+                assertEquals(seat.get("kind").getAsString(), "human"); assertEquals(seat.get("takeover").getAsString(), bot ? "bot" : "conceded");
+                assertEquals(seat.get("takeoverTurn").getAsInt(), turn);
+            }
+        }
+    }
+
+    @Test(timeOut = 90_000) public void badDeckStartupUsesTheMainShutdownSummary() throws Exception {
         System.setProperty("arena.deck.seat0", directory.resolve("missing-deck.txt").toString());
-        assertEquals(1, ArenaServerMain.runServer());
+        assertEquals(ArenaServerMain.runServer(), 1);
         JsonObject json = JsonParser.parseString(Files.readString(directory.resolve("summary.json"))).getAsJsonObject();
-        assertEquals("startupError", json.get("exitReason").getAsString());
+        assertEquals(json.get("exitReason").getAsString(), "startupError");
         assertTrue(json.get("message").getAsString().contains("Cannot read deck file"));
         assertTrue(json.getAsJsonArray("games").isEmpty());
     }
