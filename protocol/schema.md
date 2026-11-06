@@ -635,3 +635,29 @@ The socket stays bound after gameOver. Connected human seats vote with nextGame:
 Only an explicit nextGame quit or the host console quit ends the match: all seats receive message level info '<name> left; the match is over', followed by clean shutdown after a 750 ms grace period. arena.hold is superseded by this persistent results lifecycle; arena.timeoutMinutes applies separately to each running game, not to results waiting.
 
 gameOver adds placements: an array of {playerId, reason?}, surviving players first, followed by reverse Game.getLostPlayers() order (simultaneous losses retain Forge's stable order). reason uses PlayerOutcome.lossState verbatim: Conceded, LifeReachedZero, Milled, Poisoned, SpellEffect, CommanderDamage, OpponentWon, IntentionalDraw. Winners have no reason; draws have no unique winner.
+
+### Seeded runs, summaries and abort (task S.1)
+
+`-Darena.seed=<long>` installs `MyRandom.setRandom(new Random(gameSeed))` before each game's creation and opening shuffle. Without it, a SecureRandom long is chosen once per run and recorded. Data uses zero-based `gameIndex`; `gameSeed = seed + gameIndex` with Java long wraparound. Console game numbers are one-based: `[arena] Seed: <n> (game 1, gameIndex 0)`. The seed controls Forge's shared random provider, not thread scheduling, wall clocks, opaque ids or seat tokens.
+
+`-Darena.commit=<string>` supplies `serverCommit` (default `unknown`). Each transcriptHeader additionally carries `gameIndex` (integer), `seed` (signed 64-bit integer), and `serverCommit` (string), alongside its existing protocolVersion, serverVersion, seat, playerId and startedAt. Files rotate as before on rematch; gameIndex matches the run summary without timestamp inference.
+
+`-Darena.summary=<path>` sets the UTF-8 run summary path. Its default is `<arena.transcriptDir>/<startedAt>_ForgeArena_RunSummary.json`, using a Windows-safe local `yyyyMMdd-HHmmss-SSS` start timestamp; transcriptDir still defaults to `transcripts/`. The lifecycle owner writes a temporary file in that directory, then atomically renames it over the target. File-system errors are printed; startup errors produce a summary whenever the destination is writable. All normal shutdown paths share the same finalizer; forced OS termination cannot guarantee a file.
+
+Summary object fields (this is a local run artifact, not a WebSocket message):
+
+| Field | JSON type / meaning |
+|---|---|
+| protocolVersion | integer, 1 |
+| serverCommit | string |
+| startedAt, endedAt | ISO-8601 strings with local UTC offset |
+| durationMs | nonnegative integer, monotonic elapsed duration |
+| exitReason | `finished`, `timeout`, `aborted`, `quit`, `error`, or `startupError` |
+| exitCode | integer: 0 for finished/quit, 3 for aborted, 1 for timeout/error/startupError |
+| message | short string describing shutdown |
+| games | array of the per-game objects below, in gameIndex order |
+| transcripts | array of `{gameIndex: integer, seat: integer, file: string}` for files actually opened successfully; file is the JSONL basename, including any collision suffix |
+
+Each game object contains `gameIndex` and `seed` (integers), `turns` (integer), `randomCalls` (integer: absolute `MyRandom.callCount()` at game end, not a per-game delta; setRandom does not reset the counter), `draw` (boolean), `winnerSeat` (integer or null), `placements` (array of `{seat: integer, playerId: integer, name: string, reason: string|null}`), and `seats` (array of `{seat: integer, kind: "human"|"ai", takeover: "none"|"conceded"|"bot", takeoverTurn: integer|null}`). Kind records the starting controller; a handoff retains that kind and records its actual turn separately. Placements use the gameOver finishing order and Forge loss reasons above; winners have null reason. Interrupted games retain the last safe capture, no invented draw or winner, and the latest random count. An error before game creation leaves games and transcripts empty.
+
+Console help: `Commands: seats, wait N, concede N, bot N, keep N, rematch, quit, abort`. `abort` releases the run owner immediately, including while a connected seat is blocked inside a prompt; it does not concede, hand off, or default any prompt. It writes exitReason `aborted` and exits 3. Quit after results is `finished`; host quit during play is `quit`. Timeout and uncaught runtime errors exit 1. Abort/timeout need no EDT callback or Forge graph read to reach shutdown; detached summary data is captured on Forge-safe threads.

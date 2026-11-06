@@ -256,7 +256,7 @@ public final class JsonSeatRemote implements IRemote {
         this.writer = writer;
         this.match = null;
         this.registeredPlayer = null;
-        if (seat != null) writer.bindPlayer(seat.getId(), game.getId());
+        if (seat != null) { writer.observeGame(game); writer.bindPlayer(seat.getId(), game.getId()); }
         actionRouter = new ActionRouter(this, false, writer);
         writer.attachRemote(this);
     }
@@ -537,6 +537,7 @@ public final class JsonSeatRemote implements IRemote {
             ids = new IdMapper(); inputTracker = new ActiveInputTracker();
             latestState = null; revealed = new com.google.gson.JsonArray();
             inputOffers.clear(); abilities = java.util.Map.of();
+            writer.observeGame(game);
             writer.bindPlayer(seat.getId(), game.getId());
             eventPump = null;
         }

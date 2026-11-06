@@ -63,13 +63,23 @@ public final class ArenaServerMain {
         return deck;
     }
 
-    public static void main(final String[] args) throws InterruptedException, IOException {
-        try { ChessClock.minutes(System.getProperty("arena.clockMinutes", "0")); }
-        catch (IllegalArgumentException ex) { System.err.println("[arena] " + ex.getMessage()); System.exit(1); return; }
+    public static void main(final String[] args) { System.exit(runServer()); }
+
+    /** Testable lifecycle owner; only main terminates the JVM. Every path shares this finally. */
+    static int runServer() {
+        final RunSummary run = new RunSummary();
+        RunSummary.Exit exit = new RunSummary.Exit("startupError", 1, "Startup did not complete");
+        WsServer opened = null;
+        final MatchLifecycle[] lifecycle = new MatchLifecycle[1];
+        Thread.UncaughtExceptionHandler previousHandler = Thread.getDefaultUncaughtExceptionHandler();
+        boolean running = false;
+        try {
+        run.configureSeed();
+        ChessClock.minutes(System.getProperty("arena.clockMinutes", "0"));
         initializeForge();
         final ArenaPuzzle puzzle;
         try { puzzle = System.getProperty("arena.puzzle") == null ? null : ArenaPuzzle.read(java.nio.file.Path.of(System.getProperty("arena.puzzle"))); }
-        catch (IOException | IllegalArgumentException ex) { System.err.println("[arena] Cannot load puzzle: " + ex.getMessage()); System.exit(1); return; }
+        catch (IOException | IllegalArgumentException ex) { throw new IllegalArgumentException("Cannot load puzzle: " + ex.getMessage(), ex); }
         final Set<Integer> humanSeats = humanSeats(System.getProperty("arena.humanSeats", ""));
         final List<RegisteredPlayer> players = new ArrayList<>();
         // Fixed, distinct precons make the startup reproducible without relying on directory order.
@@ -82,13 +92,11 @@ public final class ArenaServerMain {
                 final String text;
                 try { text = java.nio.file.Files.readString(java.nio.file.Path.of(path)); }
                 catch (IOException ex) {
-                    System.err.println("[arena] Cannot read deck file " + path + ": " + ex.getMessage());
-                    System.exit(1); return;
+                    throw new IllegalArgumentException("Cannot read deck file " + path + ": " + ex.getMessage(), ex);
                 }
                 DeckImport.Result imported = DeckImport.parse(text, List.of());
                 if (!imported.ok()) {
-                    System.err.println(WsServer.GSON.toJson(imported.json()));
-                    System.exit(1); return;
+                    throw new IllegalArgumentException(WsServer.GSON.toJson(imported.json()));
                 }
                 deck = imported.deck();
             }
@@ -97,23 +105,27 @@ public final class ArenaServerMain {
                             : GamePlayerUtil.createAiPlayer("AI " + (players.size() + 1))));
         }
 
+        run.seats(players);
         final String host = System.getProperty("arena.bind", "127.0.0.1");
         final WsServer wsServer = new WsServer(host, Integer.getInteger("arena.port", 36800));
+        opened = wsServer;
+        wsServer.runSummary(run);
         try {
             wsServer.start();
         } catch (final Exception ex) {
             System.err.println("[arena] WebSocket bind failed: " + ex);
-            wsServer.close();
-            System.exit(1);
-            return;
+            throw new IllegalStateException("WebSocket bind failed: " + ex, ex);
         }
         System.out.println("[arena] WebSocket listening on ws://" + host + ":" + wsServer.getPort() + "/ws");
 
-        int exitCode = 0;
         try (SeatAbandonment console = new SeatAbandonment(wsServer)) {
             final List<SeatProtocolGui> seatViews = new ArrayList<>();
-            final MatchLifecycle[] lifecycle = new MatchLifecycle[1];
             final HostedMatch match = new HostedMatch() {
+                @Override public void startGame() {
+                    run.beforeGame();
+                    lifecycle[0].started();
+                    super.startGame();
+                }
                 @Override
                 public void registerSpectator(final IGuiGame gui, final PlayerControllerHuman controller) {
                     // This runs before gameplay is scheduled. The start-game hook is too late:
@@ -133,8 +145,13 @@ public final class ArenaServerMain {
             };
             lifecycle[0] = new MatchLifecycle(wsServer, match, humanSeats);
             console.matchCommand = lifecycle[0]::command;
+            Thread.setDefaultUncaughtExceptionHandler((thread, failure) -> {
+                if (previousHandler != null) previousHandler.uncaughtException(thread, failure);
+                else failure.printStackTrace(System.err);
+                lifecycle[0].failure(failure);
+            });
             match.setStartGameHook(() -> {
-                lifecycle[0].started();
+                run.capture(match.getGame());
                 if (!humanSeats.isEmpty()) seatViews.clear();
                 // HostedMatch otherwise automatically continues an all-AI match into another game.
                 match.getGame().getRules().setGamesPerMatch(1);
@@ -164,6 +181,7 @@ public final class ArenaServerMain {
                 }
                 final GameOutcome outcome = match.getGame().getOutcome();
                 System.out.println("[arena] Winner: " + (outcome.isDraw() ? "Draw" : outcome.getWinningLobbyPlayer().getName()));
+                run.finished(match.getGame());
                 wsServer.finishMeters();
                 lifecycle[0].finished();
             });
@@ -176,15 +194,27 @@ public final class ArenaServerMain {
                 try { match.startMatch(GameType.Commander, EnumSet.of(GameType.Commander), players, guis); started.complete(null); }
                 catch (RuntimeException | Error ex) { started.completeExceptionally(ex); }
             });
-            started.join(); // Lifecycle thread only; initial human setGameView snapshots run on EDT.
-            try (MatchLifecycle owner = lifecycle[0]) { owner.awaitShutdown(); }
-        } catch (java.util.concurrent.CompletionException ex) {
-            System.err.println("[arena] " + ex.getCause()); exitCode = 1;
-        } finally {
-            wsServer.close();
+            // Abort/timeout must also release startup if an EDT prompt is already blocking.
+            java.util.concurrent.CompletableFuture.anyOf(started, lifecycle[0].shutdown()).join();
+            running = true;
+            try (MatchLifecycle owner = lifecycle[0]) { owner.awaitShutdown(); exit = owner.result(); }
         }
-        // Forge owns background executors and the Swing EDT; this standalone process is finished.
-        System.exit(exitCode);
+        } catch (Throwable ex) {
+            Throwable cause = ex instanceof java.util.concurrent.CompletionException && ex.getCause() != null ? ex.getCause() : ex;
+            System.err.println("[arena] " + cause);
+            exit = new RunSummary.Exit(running ? "error" : "startupError", 1, cause.toString());
+        } finally {
+            if (lifecycle[0] != null) lifecycle[0].close();
+            if (opened != null) try { opened.close(); }
+            catch (Throwable closeError) {
+                System.err.println("[arena] Shutdown failed: " + closeError);
+                exit = new RunSummary.Exit("error", 1, closeError.toString());
+            }
+            Thread.setDefaultUncaughtExceptionHandler(previousHandler);
+            try { run.write(exit); }
+            catch (IOException | RuntimeException ex) { System.err.println("[arena] Cannot write run summary: " + ex); }
+        }
+        return exit.code();
     }
 
     static Set<Integer> humanSeats(String value) {

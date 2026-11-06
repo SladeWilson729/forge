@@ -16,7 +16,14 @@ public final class SeatWriter implements AutoCloseable {
     private static final ClientMessageSchema CLIENT_MESSAGES = new ClientMessageSchema();
     private static final System.Logger LOG = System.getLogger(SeatWriter.class.getName());
     private record Outbound(long seq, String json, boolean state, long stateSeq, JsonObject payload) { }
-    record GameStart(java.time.ZonedDateTime time, long nanos) { }
+    record GameStart(java.time.ZonedDateTime time, long nanos, int gameIndex, long seed, String serverCommit) {
+        GameStart(java.time.ZonedDateTime time, long nanos) {
+            this(time, nanos, 0, Long.getLong("arena.seed", 0L), System.getProperty("arena.commit", "unknown"));
+        }
+    }
+    private volatile RunSummary runSummary;
+    void runSummary(RunSummary summary) { runSummary = summary; }
+    void observeGame(forge.game.Game game) { if (runSummary != null) runSummary.observe(game); }
 
     // Slight headroom below 10/s also avoids a local client's timer jitter counting 11 arrivals.
     private static final long STATE_INTERVAL = TimeUnit.MILLISECONDS.toNanos(125);
@@ -185,7 +192,7 @@ public final class SeatWriter implements AutoCloseable {
 
     void bindPlayer(final int playerId, final int gameId) {
         final GameStart start = gameStarts.computeIfAbsent(gameId,
-                ignored -> new GameStart(java.time.ZonedDateTime.now(), System.nanoTime()));
+                ignored -> runSummary == null ? new GameStart(java.time.ZonedDateTime.now(), System.nanoTime()) : runSummary.gameStart(gameId));
         synchronized (queueLock) {
             final long oldSequence = sequence;
             transcriptWork.add(() -> {
@@ -201,7 +208,8 @@ public final class SeatWriter implements AutoCloseable {
                     disconnectedAtNanos = connected() ? 0 : System.nanoTime();
                     if (transcript != null) transcript.close();
                     transcriptGame = gameId;
-                    transcript = new TranscriptLog(seat, playerId, start.time(), start.nanos());
+                    transcript = new TranscriptLog(seat, playerId, start.time(), start.nanos(), start.gameIndex(), start.seed(), start.serverCommit(),
+                            file -> { if (runSummary != null) runSummary.transcript(gameId, seat, file); });
                     if (bandwidth != null) { meter = bandwidth.game(gameId, start).seats[seat]; finishMeter = false; }
                 }
                 boolean newGame = hello != null;

@@ -117,6 +117,14 @@ public final class WsServer implements AutoCloseable {
     }
 
     ChessClock clock() { return clock; }
+    private RunSummary runSummary;
+    void runSummary(RunSummary summary) {
+        runSummary = summary;
+        for (SeatWriter writer : writers) writer.runSummary(summary);
+    }
+    void recordTakeover(int gameId, int seat, boolean bot, int turn) {
+        if (runSummary != null) runSummary.takeover(gameId, seat, bot, turn);
+    }
     void finishMeters() { for (SeatWriter writer : writers) writer.finishMeter(); }
 
     /** Stop and await both groups on the lifecycle owner thread. */

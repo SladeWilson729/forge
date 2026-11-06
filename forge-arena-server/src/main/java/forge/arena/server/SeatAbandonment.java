@@ -111,7 +111,7 @@ final class SeatAbandonment implements AutoCloseable {
     private void execute(Command command) {
         try {
             String text = command.text().trim();
-            if (matchCommand != null && java.util.Set.of("rematch", "quit").contains(text)) {
+            if (matchCommand != null && java.util.Set.of("rematch", "quit", "abort").contains(text)) {
                 matchCommand.accept(text); reply(command, "[arena] " + text); return;
             }
             if (text.isEmpty() && exitOnEnter != null) { exitOnEnter.complete(null); command.result().complete(""); return; }
@@ -129,7 +129,7 @@ final class SeatAbandonment implements AutoCloseable {
             }
             String[] parts = text.split("\\s+");
             if (parts.length != 2 || !java.util.Set.of("wait", "concede", "bot", "keep").contains(parts[0]))
-                throw new IllegalArgumentException("Commands: seats, wait N, concede N, bot N, keep N, rematch, quit");
+                throw new IllegalArgumentException("Commands: seats, wait N, concede N, bot N, keep N, rematch, quit, abort");
             int seat;
             try { seat = Integer.parseInt(parts[1]); } catch (NumberFormatException ex) { throw new IllegalArgumentException("Seat must be 0..3"); }
             SeatWriter writer = server.writer(seat); JsonSeatRemote remote = writer.remote();
@@ -159,6 +159,7 @@ final class SeatAbandonment implements AutoCloseable {
             remote.whenAbandonmentReady(() -> FThreads.invokeInEdtLater(() -> {
                 try {
                     var game = remote.actionGame(); var player = game.getPlayer(remote.actionSeat());
+                    int takeoverTurn = game.getPhaseHandler().getTurn();
                     if (!(player.getController() instanceof PlayerControllerHuman human)) throw new IllegalStateException("Seat controller is no longer human");
                     // A Game worker may already be inside the old controller and install
                     // its Input AFTER clearInputs below (notably after an ability choice).
@@ -182,6 +183,7 @@ final class SeatAbandonment implements AutoCloseable {
                         // A multiplayer loser must also release its own parked Input.
                         human.getInputQueue().clearInputs();
                     }
+                    server.recordTakeover(game.getId(), seat, bot, takeoverTurn);
                     broadcast("info", name + (bot ? "'s seat is now played by a bot" : "'s seat was conceded"), -1);
                     outputMessages.add("[arena] " + name + (bot ? "'s seat is now played by a bot" : "'s seat was conceded"));
                     command.result().complete(bot ? "Bot handoff complete" : "Seat conceded");

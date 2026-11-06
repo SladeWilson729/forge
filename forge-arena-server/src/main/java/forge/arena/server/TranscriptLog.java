@@ -22,16 +22,23 @@ final class TranscriptLog implements AutoCloseable {
     private boolean warned;
 
     TranscriptLog(int seat, int playerId, ZonedDateTime startedAt, long startNanos) {
+        this(seat, playerId, startedAt, startNanos, 0, Long.getLong("arena.seed", 0L), System.getProperty("arena.commit", "unknown"), file -> { });
+    }
+
+    TranscriptLog(int seat, int playerId, ZonedDateTime startedAt, long startNanos, int gameIndex, long seed, String commit,
+                  java.util.function.Consumer<Path> opened) {
         this.startNanos = startNanos;
         try {
             Path directory = Path.of(System.getProperty("arena.transcriptDir", "transcripts"));
             Files.createDirectories(directory);
             String base = startedAt.format(DateTimeFormatter.ofPattern("yyyy-MM-dd_'ForgeArena_Transcript_'HHmmss"))
                     + "_seat" + seat;
+            Path file;
             for (int suffix = 1; ; suffix++) {
                 String name = base + (suffix == 1 ? "" : "_" + suffix) + ".jsonl";
                 try {
-                    output = Files.newBufferedWriter(directory.resolve(name), StandardCharsets.UTF_8,
+                    file = directory.resolve(name);
+                    output = Files.newBufferedWriter(file, StandardCharsets.UTF_8,
                             StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
                     break;
                 } catch (FileAlreadyExistsException collision) {
@@ -45,9 +52,13 @@ final class TranscriptLog implements AutoCloseable {
             header.addProperty("seat", seat);
             header.addProperty("playerId", playerId);
             header.addProperty("startedAt", startedAt.toOffsetDateTime().toString());
+            header.addProperty("seed", seed);
+            header.addProperty("gameIndex", gameIndex);
+            header.addProperty("serverCommit", commit);
             output.write(WsServer.GSON.toJson(header));
             output.newLine();
             flush();
+            if (output != null) opened.accept(file);
         } catch (IOException ex) { disable(ex); }
     }
 

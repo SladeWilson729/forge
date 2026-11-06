@@ -17,26 +17,42 @@ final class MatchLifecycle implements AutoCloseable {
         Thread t = new Thread(r, "Arena-match-lifecycle"); t.setDaemon(true); return t;
     });
     private final CompletableFuture<Void> stopped = new CompletableFuture<>();
-    private boolean ended, quitting;
+    private volatile boolean ended;
+    private boolean quitting;
     private volatile long deadline;
+    private final java.util.function.LongSupplier time;
+    private final long timeoutNanos;
+    private volatile RunSummary.Exit exit;
 
     MatchLifecycle(WsServer server, HostedMatch match, Set<Integer> humans) {
+        this(server, match, humans, System::nanoTime, TimeUnit.MINUTES.toNanos(Long.getLong("arena.timeoutMinutes", 30L)), true);
+    }
+    MatchLifecycle(WsServer server, HostedMatch match, Set<Integer> humans, java.util.function.LongSupplier time, long timeoutNanos, boolean automatic) {
         this.server = server; this.match = match; this.humans = Set.copyOf(humans);
+        this.time = time; this.timeoutNanos = timeoutNanos;
         for (int seat = 0; seat < 4; seat++) {
             final int index = seat;
             server.writer(seat).nextGame = decision -> decide(index, decision);
         }
-        timer.scheduleAtFixedRate(() -> FThreads.invokeInEdtLater(this::check), 100, 100, TimeUnit.MILLISECONDS);
+        if (automatic) timer.scheduleAtFixedRate(this::tick, 100, 100, TimeUnit.MILLISECONDS);
+    }
+    void tick() {
+        if (!ended && deadline != 0 && time.getAsLong() - deadline >= 0)
+            stop(new RunSummary.Exit("timeout", 1, "Game did not finish within arena.timeoutMinutes"));
+        if (!stopped.isDone()) FThreads.invokeInEdtLater(this::check);
     }
     void started() {
+        deadline = time.getAsLong() + timeoutNanos;
         FThreads.invokeInEdtLater(() -> {
             ended = false; rematches.clear();
-            deadline = System.nanoTime() + TimeUnit.MINUTES.toNanos(Long.getLong("arena.timeoutMinutes", 30L));
         });
     }
     void finished() { FThreads.invokeInEdtLater(() -> { ended = true; check(); }); }
     boolean ended() { FThreads.assertExecutedByEdt(true); return ended; }
     void command(String command) {
+        // No EDT dispatch, Forge mutation, concession or prompt defaulting: even a
+        // connected seat blocked inside an EDT prompt cannot prevent a host abort.
+        if (command.equals("abort")) { stop(new RunSummary.Exit("aborted", 3, "Run aborted by host")); return; }
         FThreads.invokeInEdtLater(() -> {
             if (command.equals("quit")) quit("Host");
             else if (ended) { rematches.addAll(humans); rematches.add(-1); check(); }
@@ -48,9 +64,8 @@ final class MatchLifecycle implements AutoCloseable {
         else { rematches.add(seat); check(); }
     }
     private void check() {
-        if (quitting) return;
+        if (quitting || stopped.isDone()) return;
         if (!ended) {
-            if (deadline != 0 && System.nanoTime() > deadline) stopped.completeExceptionally(new IllegalStateException("Game did not finish within arena.timeoutMinutes"));
             return;
         }
         // No connected humans: keep the results available until the host chooses.
@@ -82,13 +97,20 @@ final class MatchLifecycle implements AutoCloseable {
             message.addProperty("level", "info"); message.addProperty("text", name + " left; the match is over");
             server.writer(seat).sendFromIo(message);
         }
+        final RunSummary.Exit result = new RunSummary.Exit(ended ? "finished" : "quit", 0,
+                ended ? "Game finished; " + name + " quit" : name + " quit before game over");
         timer.schedule(() -> FThreads.invokeInEdtLater(() -> {
             if (ended && !match.getHumanControllers().isEmpty())
                 match.getHumanControllers().get(0).nextGameDecision(NextGameDecision.QUIT);
-            stopped.complete(null);
+            stop(result);
         }), 750, TimeUnit.MILLISECONDS);
     }
     void awaitShutdown() { stopped.join(); }
     CompletableFuture<Void> shutdown() { return stopped; }
+    RunSummary.Exit result() { return exit; }
+    void failure(Throwable error) { stop(new RunSummary.Exit("error", 1, error.toString())); }
+    private synchronized void stop(RunSummary.Exit result) {
+        if (exit == null) { exit = result; stopped.complete(null); }
+    }
     @Override public void close() { timer.shutdownNow(); }
 }
